@@ -12,6 +12,8 @@
     "lit": "^3.3.1"
   },
   "devDependencies": {
+    "prettier": "^3.0.0",
+    "prettier-plugin-tailwindcss": "^0.6.0",
     "typescript": "~5.9.3",
     "vite": "^7.2.4"
   }

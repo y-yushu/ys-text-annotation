@@ -1,127 +1,209 @@
 import { LitElement, css, html } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
-import litLogo from './assets/lit.svg'
-import viteLogo from '/vite.svg'
+import { customElement, property, state } from 'lit/decorators.js'
+import { mockContent } from './mock'
 
-/**
- * An example element.
- *
- * @slot - This element has a slot
- * @csspart button - The button
- */
-@customElement('my-element')
-export class MyElement extends LitElement {
-  /**
-   * Copy for the read the docs hint.
-   */
-  @property()
-  docsHint = 'Click on the Vite and Lit logos to learn more'
-
-  /**
-   * The number of times the button has been clicked.
-   */
-  @property({ type: Number })
-  count = 0
-
-  render() {
-    return html`
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src=${viteLogo} class="logo" alt="Vite logo" />
-        </a>
-        <a href="https://lit.dev" target="_blank">
-          <img src=${litLogo} class="logo lit" alt="Lit logo" />
-        </a>
-      </div>
-      <slot></slot>
-      <div class="card">
-        <button @click=${this._onClick} part="button">
-          count is ${this.count}
-        </button>
-      </div>
-      <p class="read-the-docs">${this.docsHint}</p>
-    `
-  }
-
-  private _onClick() {
-    this.count++
-  }
+@customElement('ys-text-annotation')
+export class YsTextAnnotation extends LitElement {
+  // 常量配置
+  private static readonly BUFFER_SIZE = 5 // 可见区域缓冲区行数
+  private static readonly BOTTOM_THRESHOLD = 10 // 底部检测容差（px）
+  private static readonly BOTTOM_EXTRA_RATIO = 1 / 3 // 底部额外空间比例
 
   static styles = css`
     :host {
-      max-width: 1280px;
-      margin: 0 auto;
-      padding: 2rem;
-      text-align: center;
+      display: flex;
+      flex-direction: column;
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      max-height: 100%;
+      min-height: 0;
+      overflow: hidden;
+      box-sizing: border-box;
     }
 
-    .logo {
-      height: 6em;
-      padding: 1.5em;
-      will-change: filter;
-      transition: filter 300ms;
-    }
-    .logo:hover {
-      filter: drop-shadow(0 0 2em #646cffaa);
-    }
-    .logo.lit:hover {
-      filter: drop-shadow(0 0 2em #325cffaa);
+    .scroll-container {
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+      position: relative;
+      box-sizing: border-box;
     }
 
-    .card {
-      padding: 2em;
+    .content-wrapper {
+      position: relative;
+      width: 100%;
     }
 
-    .read-the-docs {
-      color: #888;
-    }
-
-    ::slotted(h1) {
-      font-size: 3.2em;
-      line-height: 1.1;
-    }
-
-    a {
-      font-weight: 500;
-      color: #646cff;
-      text-decoration: inherit;
-    }
-    a:hover {
-      color: #535bf2;
-    }
-
-    button {
-      border-radius: 8px;
-      border: 1px solid transparent;
-      padding: 0.6em 1.2em;
-      font-size: 1em;
-      font-weight: 500;
-      font-family: inherit;
-      background-color: #1a1a1a;
-      cursor: pointer;
-      transition: border-color 0.25s;
-    }
-    button:hover {
-      border-color: #646cff;
-    }
-    button:focus,
-    button:focus-visible {
-      outline: 4px auto -webkit-focus-ring-color;
-    }
-
-    @media (prefers-color-scheme: light) {
-      a:hover {
-        color: #747bff;
-      }
-      button {
-        background-color: #f9f9f9;
-      }
+    .line {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      line-height: 1.5;
+      margin: 0;
+      padding: 0;
+      min-height: 1.5em;
+      box-sizing: border-box;
     }
   `
+
+  @property()
+  content = mockContent
+
+  @state()
+  private lines: string[] = []
+
+  @state()
+  private visibleStartIndex = 0
+
+  @state()
+  private visibleEndIndex = 0
+
+  @state()
+  private lineHeight = 24
+
+  @state()
+  private containerHeight = 0
+
+  private scrollContainer?: HTMLElement
+  private resizeObserver?: ResizeObserver
+  private updateTimer?: number
+
+  connectedCallback() {
+    super.connectedCallback()
+    this.updateLines()
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback()
+    this.updateTimer && cancelAnimationFrame(this.updateTimer)
+    this.resizeObserver?.disconnect()
+  }
+
+  updated(changedProperties: Map<string | number | symbol, unknown>) {
+    super.updated(changedProperties)
+    if (changedProperties.has('content')) {
+      this.updateLines()
+    }
+  }
+
+  firstUpdated() {
+    this.scrollContainer = this.shadowRoot?.querySelector('.scroll-container') as HTMLElement
+    if (!this.scrollContainer) return
+
+    this.scrollContainer.addEventListener('scroll', () => this.handleScroll())
+    this.containerHeight = this.scrollContainer.clientHeight
+
+    // 监听容器大小变化
+    this.resizeObserver = new ResizeObserver(() => {
+      if (this.scrollContainer) {
+        this.containerHeight = this.scrollContainer.clientHeight
+        this.measureLineHeight()
+        this.updateVisibleRange()
+      }
+    })
+    this.resizeObserver.observe(this.scrollContainer)
+
+    this.measureLineHeight()
+    this.updateVisibleRange()
+  }
+
+  private updateLines() {
+    this.lines = this.content.split('\n')
+    if (this.scrollContainer) {
+      this.measureLineHeight()
+      this.updateVisibleRange()
+    }
+  }
+
+  private measureLineHeight() {
+    if (!this.scrollContainer) return
+
+    // 创建临时元素测量实际行高
+    const tempDiv = document.createElement('div')
+    tempDiv.className = 'line'
+    Object.assign(tempDiv.style, {
+      position: 'absolute',
+      visibility: 'hidden',
+      height: 'auto'
+    })
+    tempDiv.textContent = 'M'
+    this.scrollContainer.appendChild(tempDiv)
+
+    const { lineHeight: lineHeightValue, fontSize } = window.getComputedStyle(tempDiv)
+    const fontSizeNum = parseFloat(fontSize)
+
+    // 计算行高：normal 使用 1.5 倍字体大小，px 直接解析，数字倍数乘以字体大小
+    if (lineHeightValue === 'normal') {
+      this.lineHeight = Math.ceil(fontSizeNum * 1.5)
+    } else if (lineHeightValue.includes('px')) {
+      this.lineHeight = parseFloat(lineHeightValue)
+    } else {
+      this.lineHeight = Math.ceil(fontSizeNum * parseFloat(lineHeightValue))
+    }
+
+    this.scrollContainer.removeChild(tempDiv)
+  }
+
+  private handleScroll() {
+    this.updateTimer && cancelAnimationFrame(this.updateTimer)
+    this.updateTimer = requestAnimationFrame(() => this.updateVisibleRange())
+  }
+
+  private updateVisibleRange() {
+    if (!this.scrollContainer || this.lines.length === 0) return
+
+    const { scrollTop, clientHeight } = this.scrollContainer
+    const containerHeight = clientHeight || this.containerHeight
+    const totalHeight = this.getTotalHeight()
+    const buffer = YsTextAnnotation.BUFFER_SIZE
+
+    // 计算可见区域的行索引范围
+    let startIndex = Math.max(0, Math.floor(scrollTop / this.lineHeight) - buffer)
+    let endIndex = Math.ceil((scrollTop + containerHeight) / this.lineHeight) + buffer
+
+    // 接近底部时，确保包含最后一行
+    const isNearBottom = scrollTop + containerHeight >= totalHeight - YsTextAnnotation.BOTTOM_THRESHOLD
+    endIndex = isNearBottom ? this.lines.length - 1 : Math.min(this.lines.length - 1, endIndex)
+
+    // 确保索引范围有效
+    startIndex = Math.min(startIndex, endIndex)
+    endIndex = Math.max(startIndex, endIndex)
+
+    this.visibleStartIndex = startIndex
+    this.visibleEndIndex = endIndex
+    this.containerHeight = containerHeight
+  }
+
+  private getTotalHeight(): number {
+    const contentHeight = this.lines.length * this.lineHeight
+    const extraBottomSpace = this.containerHeight * YsTextAnnotation.BOTTOM_EXTRA_RATIO
+    return contentHeight + extraBottomSpace
+  }
+
+  private getOffsetTop(index: number): number {
+    return index * this.lineHeight
+  }
+
+  render() {
+    const visibleLines = this.lines.slice(this.visibleStartIndex, this.visibleEndIndex + 1)
+    const totalHeight = this.getTotalHeight()
+    const offsetTop = this.getOffsetTop(this.visibleStartIndex)
+
+    return html`
+      <div class="scroll-container" @scroll=${this.handleScroll}>
+        <div class="content-wrapper" style="height: ${totalHeight}px;">
+          <div style="transform: translateY(${offsetTop}px);">${visibleLines.map(line => html`<div class="line">${line || '\u00A0'}</div>`)}</div>
+        </div>
+      </div>
+    `
+  }
 }
 
 declare global {
   interface HTMLElementTagNameMap {
-    'my-element': MyElement
+    'ys-text-annotation': YsTextAnnotation
   }
 }
