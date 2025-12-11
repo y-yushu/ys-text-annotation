@@ -1,11 +1,27 @@
-import { LitElement, css, html, svg } from 'lit'
+import { LitElement, css, html, svg, unsafeCSS } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { mockContent } from './mock'
+import styles from './index.css?inline'
+import {
+  getShadowDOMSelection,
+  getTextOffsetInLine,
+  calculateBezierCurvePath,
+  calculateEditLayerPosition,
+  calculateContextMenuPosition,
+  measureLineHeight,
+  getAnnotationsByLineId
+} from './utils'
 
 // 按行拆分文本
 interface LineItem {
   id: number
   content: string
+}
+
+// 实体标注的类型
+interface AnnotationType {
+  type: string
+  color: string
 }
 
 // 实体标注
@@ -15,16 +31,18 @@ interface AnnotationItem {
   start: number // 起始位置
   end: number // 结束位置
   content: string // 标注内容
-  description: string // 标注描述
+  type: string // 分类
+  description: string // 描述
   color?: string // 颜色
 }
 
 // 标注模拟数据
 const mockAnnotation: AnnotationItem[] = [
-  { id: '1', lineId: 2, start: 3, end: 5, content: '天蚕', description: '人物', color: '#3271ae' },
-  { id: '2', lineId: 7, start: 5, end: 11, content: '第1497章', description: '章节', color: '#547689' },
-  { id: '3', lineId: 8, start: 12, end: 30, content: '原本拥有圣龙之命，却被敌国武王以亿万', description: '章节' },
-  { id: '4', lineId: 90, start: 0, end: 2, content: '周元', description: '人物' }
+  { id: '1', lineId: 2, start: 3, end: 5, content: '天蚕', type: '人物', description: '', color: '#3271ae' },
+  { id: '2', lineId: 7, start: 5, end: 11, content: '第1497章', type: '章节', description: '', color: '#547689' },
+  { id: '3', lineId: 8, start: 12, end: 30, content: '原本拥有圣龙之命，却被敌国武王以亿万', type: '章节', description: '', color: '#547689' },
+  { id: '4', lineId: 25, start: 1, end: 3, content: '此时', type: '时间', description: '', color: '#547689' },
+  { id: '5', lineId: 21, start: 2, end: 5, content: '青檀石', type: '物品', description: '', color: '#5c2d91' }
 ]
 
 // 关系
@@ -39,7 +57,8 @@ interface RelationshipItem {
 // 模拟数据
 const mockRelationship: RelationshipItem[] = [
   { id: '1-2', startId: '1', endId: '2', label: '', color: '#df970b' },
-  { id: '1-3', startId: '1', endId: '3', label: '关系2', color: '#53df0b' }
+  { id: '1-3', startId: '1', endId: '3', label: '关系2', color: '#53df0b' },
+  { id: '3-5', startId: '3', endId: '5', label: '关系3', color: '#722ed1' }
 ]
 
 @customElement('ys-text-annotation')
@@ -50,148 +69,14 @@ export class YsTextAnnotation extends LitElement {
   private static readonly BOTTOM_EXTRA_RATIO = 1 / 3 // 底部额外空间比例
 
   static styles = css`
-    :host {
-      font-size: 16px;
-      display: flex;
-      flex-direction: column;
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      max-height: 100%;
-      min-height: 0;
-      overflow: hidden;
-      box-sizing: border-box;
-    }
-
-    .scroll-container {
-      position: relative;
-      flex: 1;
-      min-height: 0;
-      width: 100%;
-      overflow-y: auto;
-      overflow-x: hidden;
-      position: relative;
-      box-sizing: border-box;
-    }
-
-    .content-wrapper {
-      position: relative;
-      width: 100%;
-      background: #ffffff78;
-      z-index: 1;
-    }
-
-    .virtual-list-layer {
-      position: relative;
-      z-index: 1;
-      padding-right: 40px;
-    }
-
-    .virtual-list-layer .line {
-      position: relative;
-    }
-
-    /* 当 dimmed 时，使用遮罩层让 line 变暗，但 line-highlight 不受影响 */
-    .virtual-list-layer.dimmed .line::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(255, 255, 255, 0.9);
-      pointer-events: none;
-      z-index: 0;
-      transition: opacity 0.3s ease;
-    }
-
-    /* line-highlight 在遮罩层之上，保持清晰 */
-    .virtual-list-layer .line-highlight {
-      position: relative;
-      z-index: 1;
-    }
-
-    .relationship-layer {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      overflow: visible;
-      z-index: 10;
-      opacity: 0.1;
-      transition: opacity 0.3s ease;
-    }
-
-    .relationship-layer.highlighted {
-      opacity: 1;
-    }
-
-    .relationship-path {
-      stroke-width: 2;
-      fill: none;
-      cursor: pointer;
-      pointer-events: all;
-    }
-
-    .relationship-label {
-      font-size: 12px;
-      dominant-baseline: middle;
-      text-anchor: middle;
-      font-weight: 500;
-      cursor: pointer;
-      pointer-events: all;
-    }
-
-    .line {
-      white-space: pre-wrap;
-      word-wrap: break-word;
-      line-height: 2.5;
-      margin: 0;
-      padding: 0;
-      min-height: 1.5em;
-      box-sizing: border-box;
-    }
-
-    .line-highlight {
-      --highlight-color: #2d0bdf;
-      padding-inline: 0.5rem;
-      text-align: center;
-      position: relative;
-      display: inline-block;
-      vertical-align: baseline;
-      line-height: inherit;
-      color: var(--highlight-color);
-      white-space: normal;
-      max-width: 100%;
-    }
-
-    .line-highlight-border {
-      position: absolute;
-      top: 0.375rem;
-      left: 0;
-      right: 0;
-      bottom: 0.375rem;
-      border: 2px solid var(--highlight-color);
-    }
-
-    .line-highlight-desc {
-      position: absolute;
-      left: 0;
-      right: 0;
-      top: calc(100% - 0.375rem);
-      height: 0.75rem;
-      line-height: 0.75rem;
-      font-size: 0.625rem;
-      background: var(--highlight-color);
-      color: #fff;
-    }
+    ${unsafeCSS(styles)}
   `
 
   @property()
   content = mockContent
+
+  @property({ type: Boolean })
+  editingEnabled = true
 
   @state()
   private lines: LineItem[] = []
@@ -209,6 +94,16 @@ export class YsTextAnnotation extends LitElement {
 
   @state()
   private containerHeight = 0
+
+  @state()
+  private annotationType: AnnotationType[] = [
+    { type: '人物', color: '#3271ae' },
+    { type: '地点', color: '#547689' },
+    { type: '组织', color: '#5c2d91' },
+    { type: '时间', color: '#9c27b0' },
+    { type: '事件', color: '#673ab7' },
+    { type: '其他', color: '#9c27b0' }
+  ]
 
   @state()
   private annotations: AnnotationItem[] = mockAnnotation
@@ -233,10 +128,47 @@ export class YsTextAnnotation extends LitElement {
   @state()
   private isHoveringHighlight = false
 
+  @state()
+  private isSelectingText = false
+  private mouseDownPosition = { x: 0, y: 0 }
+
+  @state()
+  private editLayerVisible = false
+
+  @state()
+  private editLayerPosition = { x: 0, y: 0 }
+
+  @state()
+  private editInputValue = ''
+
+  @state()
+  private selectedAnnotationType: string = ''
+
+  private selectedTextInfo: {
+    lineId: number
+    start: number
+    end: number
+    content: string
+  } | null = null
+
+  private savedRange: Range | null = null
+
+  @state()
+  private contextMenuVisible = false
+
+  @state()
+  private contextMenuPosition = { x: 0, y: 0 }
+
+  private contextMenuTarget: {
+    type: 'annotation' | 'relationship'
+    id: string
+  } | null = null
+
   private scrollContainer?: HTMLElement
   private resizeObserver?: ResizeObserver
   private updateTimer?: number
   private relationshipTimer?: number
+  private globalMouseUpHandler?: () => void
 
   connectedCallback() {
     super.connectedCallback()
@@ -252,6 +184,10 @@ export class YsTextAnnotation extends LitElement {
     this.updateTimer && cancelAnimationFrame(this.updateTimer)
     this.relationshipTimer && cancelAnimationFrame(this.relationshipTimer)
     this.resizeObserver?.disconnect()
+    if (this.globalMouseUpHandler) {
+      document.removeEventListener('mouseup', this.globalMouseUpHandler)
+      this.globalMouseUpHandler = undefined
+    }
   }
 
   updated(changedProperties: Map<string | number | symbol, unknown>) {
@@ -260,6 +196,15 @@ export class YsTextAnnotation extends LitElement {
     if (changedProperties.has('content')) {
       this.updateLines()
       this.hasInitializedLines = true
+    }
+
+    // 当编辑状态关闭时，隐藏编辑层
+    if (changedProperties.has('editingEnabled') && !this.editingEnabled) {
+      this.editLayerVisible = false
+      this.selectedTextInfo = null
+      this.savedRange = null
+      this.editInputValue = ''
+      this.selectedAnnotationType = ''
     }
 
     if (
@@ -280,6 +225,55 @@ export class YsTextAnnotation extends LitElement {
     this.containerHeight = this.scrollContainer.clientHeight
     this.containerWidth = this.scrollContainer.clientWidth
 
+    // 监听文本选择事件（只处理左键）
+    this.scrollContainer.addEventListener('mousedown', (e: MouseEvent) => {
+      // 只处理左键（button === 0），忽略右键和中键
+      if (e.button === 0) {
+        this.isSelectingText = true
+        this.mouseDownPosition = { x: e.clientX, y: e.clientY }
+      }
+    })
+
+    // 监听 mouseup 事件，获取选中的文本（只处理左键）
+    this.scrollContainer.addEventListener('mouseup', (e: MouseEvent) => {
+      // 只处理左键（button === 0）
+      if (e.button !== 0) {
+        return
+      }
+
+      // 检查鼠标是否移动过（即是否真的选择了文本）
+      const mouseMoved = Math.abs(e.clientX - this.mouseDownPosition.x) > 2 || Math.abs(e.clientY - this.mouseDownPosition.y) > 2
+
+      if (!mouseMoved) {
+        // 如果鼠标没有移动，只是点击，不处理
+        setTimeout(() => {
+          this.isSelectingText = false
+        }, 100)
+        return
+      }
+
+      // 直接获取选择
+      const selection = getShadowDOMSelection(this.shadowRoot)
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0)
+        if (!range.collapsed && range.toString().trim()) {
+          // 保存 Range 并处理选择
+          this.savedRange = range.cloneRange()
+          this.handleTextSelection()
+        }
+      }
+
+      this.isSelectingText = false
+    })
+
+    // 监听全局 mouseup 事件，确保即使鼠标在容器外松开也能重置状态
+    this.globalMouseUpHandler = () => {
+      if (this.isSelectingText) {
+        this.isSelectingText = false
+      }
+    }
+    document.addEventListener('mouseup', this.globalMouseUpHandler)
+
     // 监听容器大小变化
     this.resizeObserver = new ResizeObserver(() => {
       if (this.scrollContainer) {
@@ -295,6 +289,15 @@ export class YsTextAnnotation extends LitElement {
     this.measureLineHeight()
     this.updateVisibleRange()
     this.scheduleMeasureRelationships()
+
+    // 监听全局点击事件，关闭右键菜单（只处理左键点击）
+    document.addEventListener('click', (e: MouseEvent) => {
+      // 只处理左键点击（button === 0），避免影响右键菜单
+      if (e.button === 0) {
+        this.contextMenuVisible = false
+        this.contextMenuTarget = null
+      }
+    })
   }
 
   private updateLines() {
@@ -303,7 +306,6 @@ export class YsTextAnnotation extends LitElement {
       id: index,
       content: content
     }))
-    console.log('🚀 ~ YsTextAnnotation ~ updateLines ~ this.lines:', this.lines)
     if (this.scrollContainer) {
       this.measureLineHeight()
       this.updateVisibleRange()
@@ -312,37 +314,23 @@ export class YsTextAnnotation extends LitElement {
 
   private measureLineHeight() {
     if (!this.scrollContainer) return
-
-    // 创建临时元素测量实际行高
-    const tempDiv = document.createElement('div')
-    tempDiv.className = 'line'
-    Object.assign(tempDiv.style, {
-      position: 'absolute',
-      visibility: 'hidden',
-      height: 'auto'
-    })
-    tempDiv.textContent = 'M'
-    this.scrollContainer.appendChild(tempDiv)
-
-    const { lineHeight: lineHeightValue, fontSize } = window.getComputedStyle(tempDiv)
-    const fontSizeNum = parseFloat(fontSize)
-
-    // 计算行高：normal 使用 1.5 倍字体大小，px 直接解析，数字倍数乘以字体大小
-    if (lineHeightValue === 'normal') {
-      this.lineHeight = Math.ceil(fontSizeNum * 1.5)
-    } else if (lineHeightValue.includes('px')) {
-      this.lineHeight = parseFloat(lineHeightValue)
-    } else {
-      this.lineHeight = Math.ceil(fontSizeNum * parseFloat(lineHeightValue))
-    }
-
-    this.scrollContainer.removeChild(tempDiv)
+    this.lineHeight = measureLineHeight(this.scrollContainer)
   }
 
   private handleScroll() {
     this.updateTimer && cancelAnimationFrame(this.updateTimer)
-    this.updateTimer = requestAnimationFrame(() => this.updateVisibleRange())
-    this.scheduleMeasureRelationships()
+    this.updateTimer = requestAnimationFrame(() => {
+      this.updateVisibleRange()
+      // 如果编辑层可见，重新计算位置
+      if (this.editLayerVisible && this.savedRange) {
+        this.updateEditLayerPosition()
+      }
+      // 滚动时关闭右键菜单
+      if (this.contextMenuVisible) {
+        this.contextMenuVisible = false
+        this.contextMenuTarget = null
+      }
+    })
   }
 
   private updateVisibleRange() {
@@ -386,9 +374,6 @@ export class YsTextAnnotation extends LitElement {
   private measureRelationships() {
     if (!this.scrollContainer) return
 
-    const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-    if (!contentWrapper) return
-
     const paths: Array<{
       id: string
       d: string
@@ -402,6 +387,10 @@ export class YsTextAnnotation extends LitElement {
     // 默认颜色
     const defaultColor = '#c12c1f'
 
+    // 获取虚拟列表层元素
+    const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
+    if (!virtualListLayer) return
+
     // 遍历所有关系
     for (const relationship of this.relationships) {
       const { id, startId, endId, label, color } = relationship
@@ -414,41 +403,26 @@ export class YsTextAnnotation extends LitElement {
       // 如果起点或终点元素不存在（未渲染），跳过
       if (!startElement || !endElement) continue
 
-      // 获取元素相对于 content-wrapper 的中心位置
+      // 获取元素相对于虚拟列表可见区域的中心位置
+      // 这样计算出的坐标是相对于虚拟列表可见区域的，SVG 使用相同的 transform 后就能正确对齐
       const getElementCenterPosition = (element: HTMLElement) => {
-        // 找到包含该元素的 line 元素
-        let lineElement: HTMLElement | null = element
-        while (lineElement && !lineElement.classList.contains('line')) {
-          lineElement = lineElement.parentElement
-        }
-        if (!lineElement) return null
-
-        // 找到 line 在虚拟列表中的实际索引
-        const lineParent = lineElement.parentElement
-        if (!lineParent) return null
-
-        const lineIndexInView = Array.from(lineParent.children).indexOf(lineElement)
-        const actualLineIndex = this.visibleStartIndex + lineIndexInView
-
-        // 计算 line 的顶部位置（相对于 content-wrapper 的绝对位置）
-        const lineTop = actualLineIndex * this.lineHeight
-
-        // 获取元素和 line 的 getBoundingClientRect（相对于视口）
+        // 获取元素和虚拟列表层的 getBoundingClientRect（相对于视口）
         const elementRect = element.getBoundingClientRect()
-        const lineRect = lineElement.getBoundingClientRect()
+        const virtualListLayerRect = virtualListLayer.getBoundingClientRect()
 
-        // 计算元素相对于 line 的偏移（已经考虑了 transform）
-        const relativeTop = elementRect.top - lineRect.top
-        const relativeLeft = elementRect.left - lineRect.left
+        // 计算元素相对于虚拟列表可见区域的坐标
+        // x 坐标：元素相对于虚拟列表层的 x 坐标
+        const relativeLeft = elementRect.left - virtualListLayerRect.left
 
-        // 计算元素相对于 content-wrapper 的绝对位置
-        const absoluteTop = lineTop + relativeTop
-        const absoluteLeft = relativeLeft
+        // y 坐标：元素相对于虚拟列表层的 y 坐标
+        // 由于虚拟列表层使用了 transform: translateY(offsetTop)，getBoundingClientRect() 已经考虑了 transform
+        // 所以直接计算差值即可得到相对于虚拟列表可见区域的坐标
+        const relativeTop = elementRect.top - virtualListLayerRect.top
 
-        // 返回中心点坐标（相对于 content-wrapper）
+        // 返回中心点坐标（相对于虚拟列表可见区域）
         return {
-          x: absoluteLeft + elementRect.width / 2,
-          y: absoluteTop + elementRect.height / 2
+          x: relativeLeft + elementRect.width / 2,
+          y: relativeTop + elementRect.height / 2
         }
       }
 
@@ -458,76 +432,16 @@ export class YsTextAnnotation extends LitElement {
       if (!startPos || !endPos) continue
 
       // 生成贝塞尔曲线路径（从起点中心到终点中心）
-      const controlOffset = Math.abs(endPos.y - startPos.y) / 2
-      const startX = startPos.x
-      const startY = startPos.y
-      const endX = endPos.x
-      const endY = endPos.y
-      const control1X = startX
-      const control1Y = startY + controlOffset
-      const control2X = endX
-      const control2Y = endY - controlOffset
-
-      const d = `M ${startX} ${startY} C ${control1X} ${control1Y}, ${control2X} ${control2Y}, ${endX} ${endY}`
-
-      // 如果有标签，计算路径中间点的位置和角度
-      let labelX: number | undefined
-      let labelY: number | undefined
-      let labelAngle: number | undefined
-
-      if (label) {
-        // 计算三次贝塞尔曲线在 t=0.5 时的点（中间点）
-        // B(t) = (1-t)³P₀ + 3(1-t)²tP₁ + 3(1-t)t²P₂ + t³P₃
-        // 对于 t=0.5: B(0.5) = 0.125P₀ + 0.375P₁ + 0.375P₂ + 0.125P₃
-        labelX = 0.125 * startX + 0.375 * control1X + 0.375 * control2X + 0.125 * endX
-        labelY = 0.125 * startY + 0.375 * control1Y + 0.375 * control2Y + 0.125 * endY
-
-        // 计算切向量（导数）用于确定角度
-        // 三次贝塞尔曲线导数公式：B'(t) = 3(1-t)²(P₁-P₀) + 6(1-t)t(P₂-P₁) + 3t²(P₃-P₂)
-        // 对于 t=0.5: B'(0.5) = 0.75(P₁-P₀) + 1.5(P₂-P₁) + 0.75(P₃-P₂)
-        // 简化: B'(0.5) = 0.75(P₁-P₀) + 1.5(P₂-P₁) + 0.75(P₃-P₂)
-        //            = 0.75P₁ - 0.75P₀ + 1.5P₂ - 1.5P₁ + 0.75P₃ - 0.75P₂
-        //            = -0.75P₀ - 0.75P₁ + 0.75P₂ + 0.75P₃
-        //            = 0.75(-P₀ - P₁ + P₂ + P₃)
-        const tangentX = 0.75 * (-startX - control1X + control2X + endX)
-        const tangentY = 0.75 * (-startY - control1Y + control2Y + endY)
-
-        // 计算角度（弧度转角度），注意 SVG 坐标系 y 向下，所以角度需要调整
-        // Math.atan2 返回的是从 x 轴正方向到向量的角度，范围是 -π 到 π
-        labelAngle = (Math.atan2(tangentY, tangentX) * 180) / Math.PI
-
-        // 如果角度超过 90 度，翻转文本（避免倒置）
-        if (Math.abs(labelAngle) > 90) {
-          labelAngle += 180
-        }
-
-        // 计算法向量（垂直于切向量，用于向上偏移标签）
-        // 法向量可以是 (-tangentY, tangentX) 或 (tangentY, -tangentX)
-        // 我们需要选择一个指向"上方"的法向量（在SVG坐标系中，y减小表示向上）
-        let normalX = -tangentY
-        let normalY = tangentX
-
-        // 如果法向量的y分量是正数（指向下方），则反转方向
-        // 因为SVG坐标系y向下，所以normalY为负表示向上
-        if (normalY > 0) {
-          normalX = tangentY
-          normalY = -tangentX
-        }
-
-        // 归一化法向量
-        const normalLength = Math.sqrt(normalX * normalX + normalY * normalY)
-        if (normalLength > 0) {
-          normalX = normalX / normalLength
-          normalY = normalY / normalLength
-        }
-
-        // 沿着法向量方向向上偏移标签位置（偏移距离设为 15px）
-        const offsetDistance = 10
-        labelX = labelX + normalX * offsetDistance
-        labelY = labelY + normalY * offsetDistance
-      }
-
-      paths.push({ id, d, label, color: pathColor, labelX, labelY, labelAngle })
+      const bezierResult = calculateBezierCurvePath(startPos, endPos, label)
+      paths.push({
+        id,
+        d: bezierResult.d,
+        label,
+        color: pathColor,
+        labelX: bezierResult.labelX,
+        labelY: bezierResult.labelY,
+        labelAngle: bezierResult.labelAngle
+      })
     }
 
     this.relationshipPaths = paths
@@ -539,16 +453,13 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
-   * 根据lineId查找对应的标注数据
-   */
-  private getAnnotationsByLineId(lineId: number): AnnotationItem[] {
-    return this.annotations.filter(annotation => annotation.lineId === lineId)
-  }
-
-  /**
    * 处理鼠标移入高亮节点
    */
   private handleHighlightMouseEnter() {
+    // 如果正在选择文本，不触发高亮
+    if (this.isSelectingText) {
+      return
+    }
     this.isHoveringHighlight = true
   }
 
@@ -560,13 +471,300 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
+   * 处理文本选择事件
+   */
+  private handleTextSelection() {
+    // 如果编辑状态未开启，不允许选中文本进行编辑
+    if (!this.editingEnabled) {
+      this.editLayerVisible = false
+      this.savedRange = null
+      return
+    }
+
+    // 使用保存的 Range 对象，而不是从 selection 获取
+    const range = this.savedRange
+
+    if (!range) {
+      this.editLayerVisible = false
+      return
+    }
+
+    // 检查选择是否折叠（没有选中文本）
+    if (range.collapsed) {
+      this.editLayerVisible = false
+      this.savedRange = null
+      return
+    }
+
+    const rawSelectedText = range.toString()
+    const selectedText = rawSelectedText.trim()
+
+    // 如果没有选中文本，隐藏编辑图层
+    if (!selectedText) {
+      this.editLayerVisible = false
+      this.savedRange = null
+      return
+    }
+
+    // 检查选中的文本是否在虚拟列表中
+    const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
+    if (!virtualListLayer) return
+
+    const virtualListLayerRect = virtualListLayer.getBoundingClientRect()
+    const rangeRect = range.getBoundingClientRect()
+
+    // 检查选中文本是否在虚拟列表层内
+    if (
+      rangeRect.left < virtualListLayerRect.left ||
+      rangeRect.right > virtualListLayerRect.right ||
+      rangeRect.top < virtualListLayerRect.top ||
+      rangeRect.bottom > virtualListLayerRect.bottom
+    ) {
+      return
+    }
+
+    // 找到包含选中文本的 line 元素
+    // commonAncestorContainer 可能是文本节点，需要找到元素节点
+    let node: Node | null = range.commonAncestorContainer
+    // 如果是文本节点，获取其父元素
+    if (node.nodeType === Node.TEXT_NODE) {
+      node = node.parentElement
+    }
+    let lineElement: HTMLElement | null = node as HTMLElement
+    while (lineElement && (!lineElement.classList || !lineElement.classList.contains('line'))) {
+      lineElement = lineElement.parentElement
+    }
+    if (!lineElement) return
+
+    // 找到 line 在虚拟列表中的索引
+    const lineParent = lineElement.parentElement
+    if (!lineParent) return
+
+    const lineIndexInView = Array.from(lineParent.children).indexOf(lineElement)
+    const actualLineIndex = this.visibleStartIndex + lineIndexInView
+
+    // 获取 line 的原始文本内容
+    const lineContent = this.lines[actualLineIndex]?.content || ''
+    if (!lineContent) return
+
+    // 计算选中文本在 line 文本中的位置
+    // 由于 line 中可能包含标注元素，我们需要找到选中文本在原始 lineContent 中的位置
+    let startOffset = getTextOffsetInLine(lineElement, range.startContainer, range.startOffset)
+    let endOffset = getTextOffsetInLine(lineElement, range.endContainer, range.endOffset)
+
+    // 如果选中的文本经过 trim，需要调整 start 和 end 来匹配 trim 后的内容
+    // 找到 trim 后的文本在原始文本中的实际位置
+    if (rawSelectedText !== selectedText) {
+      // 获取原始范围对应的文本
+      const rawRangeText = lineContent.substring(startOffset, endOffset)
+      // 计算前导空格数
+      const leadingSpaces = rawRangeText.length - rawRangeText.trimStart().length
+      // 计算尾部空格数
+      const trailingSpaces = rawRangeText.length - rawRangeText.trimEnd().length
+
+      // 调整偏移量：去掉前导和尾部空格
+      startOffset = startOffset + leadingSpaces
+      endOffset = endOffset - trailingSpaces
+    }
+
+    // 保存选中的文本信息
+    this.selectedTextInfo = {
+      lineId: actualLineIndex,
+      start: startOffset,
+      end: endOffset,
+      content: selectedText
+    }
+
+    // 计算编辑图层的位置
+    this.updateEditLayerPosition()
+    this.editInputValue = ''
+    this.selectedAnnotationType = ''
+    this.editLayerVisible = true
+
+    // 聚焦下拉选择框
+    this.updateComplete.then(() => {
+      const select = this.shadowRoot?.querySelector('.edit-layer select') as HTMLSelectElement
+      if (select) {
+        select.focus()
+      }
+    })
+  }
+
+  /**
+   * 更新编辑层位置（用于滚动时重新定位）
+   */
+  private updateEditLayerPosition() {
+    if (!this.savedRange || !this.scrollContainer) return
+
+    const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
+    if (!contentWrapper) return
+
+    this.editLayerPosition = calculateEditLayerPosition(this.savedRange, this.scrollContainer, contentWrapper)
+  }
+
+  /**
+   * 处理确认按钮点击
+   */
+  private handleConfirmEdit() {
+    // 验证下拉选择框是否已选择（必填）
+    if (!this.selectedAnnotationType) {
+      return
+    }
+
+    // 如果已选择类型，创建节点
+    if (this.selectedTextInfo) {
+      // 查找选中的类型对应的颜色
+      const selectedTypeObj = this.annotationType.find(type => type.type === this.selectedAnnotationType)
+      const typeColor = selectedTypeObj?.color || '#2d0bdf'
+
+      const trimmedDescription = this.editInputValue.trim()
+
+      const newId = `anno-${Date.now()}`
+      const newAnnotation: AnnotationItem = {
+        id: newId,
+        lineId: this.selectedTextInfo.lineId,
+        start: this.selectedTextInfo.start,
+        end: this.selectedTextInfo.end,
+        content: this.selectedTextInfo.content,
+        type: this.selectedAnnotationType,
+        description: trimmedDescription,
+        color: typeColor
+      }
+
+      // 添加到标注列表
+      this.annotations = [...this.annotations, newAnnotation]
+
+      // 清除文本选择（使用 Shadow DOM 的选择）
+      const selection = getShadowDOMSelection(this.shadowRoot)
+      if (selection) {
+        selection.removeAllRanges()
+      } else {
+        // 回退到全局选择清除（如果 Shadow DOM 选择不可用）
+        window.getSelection()?.removeAllRanges()
+      }
+    }
+
+    // 隐藏编辑图层
+    this.editLayerVisible = false
+    this.selectedTextInfo = null
+    this.editInputValue = ''
+    this.selectedAnnotationType = ''
+    this.savedRange = null
+  }
+
+  /**
+   * 处理下拉选择框变化
+   */
+  private handleTypeSelectChange(e: Event) {
+    const select = e.target as HTMLSelectElement
+    this.selectedAnnotationType = select.value
+  }
+
+  /**
+   * 处理输入框输入
+   */
+  private handleInputChange(e: Event) {
+    const input = e.target as HTMLInputElement
+    this.editInputValue = input.value
+  }
+
+  /**
+   * 处理输入框回车键
+   */
+  private handleInputKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      this.handleConfirmEdit()
+    } else if (e.key === 'Escape') {
+      this.editLayerVisible = false
+      this.selectedTextInfo = null
+      this.editInputValue = ''
+      this.selectedAnnotationType = ''
+      this.savedRange = null
+    }
+  }
+
+  /**
+   * 处理标注右键菜单
+   */
+  private handleAnnotationContextMenu(e: MouseEvent, annotationId: string) {
+    e.preventDefault()
+    e.stopPropagation()
+
+    // 重置文本选择状态，确保右键菜单可以正常显示
+    this.isSelectingText = false
+
+    const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
+    if (!contentWrapper) return
+
+    this.contextMenuPosition = calculateContextMenuPosition(e, contentWrapper)
+
+    this.contextMenuTarget = {
+      type: 'annotation',
+      id: annotationId
+    }
+
+    this.contextMenuVisible = true
+  }
+
+  /**
+   * 处理关系右键菜单
+   */
+  private handleRelationshipContextMenu(e: MouseEvent, relationshipId: string) {
+    e.preventDefault()
+    e.stopPropagation()
+
+    // 重置文本选择状态，确保右键菜单可以正常显示
+    this.isSelectingText = false
+
+    const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
+    if (!contentWrapper) return
+
+    this.contextMenuPosition = calculateContextMenuPosition(e, contentWrapper)
+
+    this.contextMenuTarget = {
+      type: 'relationship',
+      id: relationshipId
+    }
+
+    this.contextMenuVisible = true
+  }
+
+  /**
+   * 处理删除操作
+   */
+  private handleDelete() {
+    if (!this.contextMenuTarget) return
+
+    if (this.contextMenuTarget.type === 'annotation') {
+      // 删除标注
+      const annotationId = this.contextMenuTarget.id
+      // 删除标注
+      this.annotations = this.annotations.filter(annotation => annotation.id !== annotationId)
+      // 删除该标注关联的所有关系
+      this.relationships = this.relationships.filter(relationship => relationship.startId !== annotationId && relationship.endId !== annotationId)
+    } else if (this.contextMenuTarget.type === 'relationship') {
+      // 删除关系
+      const relationshipId = this.contextMenuTarget.id
+      this.relationships = this.relationships.filter(relationship => relationship.id !== relationshipId)
+    }
+
+    // 关闭右键菜单
+    this.contextMenuVisible = false
+    this.contextMenuTarget = null
+  }
+
+  /**
    * 渲染行内容，如果有标注则高亮显示
    */
   private renderLineContent(line: LineItem) {
-    const annotations = this.getAnnotationsByLineId(line.id)
+    const annotations = getAnnotationsByLineId(this.annotations, line.id)
 
-    // 如果没有标注，直接返回原文本
-    if (annotations.length === 0) {
+    // 检查是否有正在编辑的选中文本在当前行
+    const isEditingThisLine = this.editLayerVisible && this.selectedTextInfo && this.selectedTextInfo.lineId === line.id
+
+    // 如果没有标注且没有正在编辑的选中文本，直接返回原文本
+    if (annotations.length === 0 && !isEditingThisLine) {
       return line.content || '\u00A0'
     }
 
@@ -577,8 +775,56 @@ export class YsTextAnnotation extends LitElement {
     const fragments: Array<string | ReturnType<typeof html>> = []
     let lastIndex = 0
 
+    // 合并标注和正在编辑的选中文本，统一处理
+    const allHighlights: Array<{
+      start: number
+      end: number
+      content: string
+      type: 'annotation' | 'editing'
+      annotation?: AnnotationItem
+    }> = []
+
+    // 检查正在编辑的选中文本是否与某个标注完全重叠
+    let editingOverlapsAnnotation = false
+    let overlappedAnnotation: AnnotationItem | null = null
+    if (isEditingThisLine && this.selectedTextInfo) {
+      const { start, end } = this.selectedTextInfo
+      // 查找是否有标注与正在编辑的选中文本完全重叠
+      overlappedAnnotation = sortedAnnotations.find(annotation => annotation.start === start && annotation.end === end) || null
+      editingOverlapsAnnotation = !!overlappedAnnotation
+    }
+
+    // 添加标注（如果正在编辑的选中文本与某个标注完全重叠，跳过该标注）
     sortedAnnotations.forEach(annotation => {
-      const { start, end, content, description, color } = annotation
+      // 如果正在编辑的选中文本与这个标注完全重叠，跳过这个标注
+      if (editingOverlapsAnnotation && overlappedAnnotation && annotation.id === overlappedAnnotation.id) {
+        return
+      }
+      allHighlights.push({
+        start: annotation.start,
+        end: annotation.end,
+        content: annotation.content,
+        type: 'annotation',
+        annotation
+      })
+    })
+
+    // 添加正在编辑的选中文本
+    if (isEditingThisLine && this.selectedTextInfo) {
+      const { start, end, content } = this.selectedTextInfo
+      allHighlights.push({
+        start,
+        end,
+        content,
+        type: 'editing'
+      })
+    }
+
+    // 按start位置排序所有高亮
+    allHighlights.sort((a, b) => a.start - b.start)
+
+    allHighlights.forEach(highlight => {
+      const { start, end, content, type, annotation } = highlight
 
       // 跳过已经处理过的标注（处理重叠情况）
       if (start < lastIndex) {
@@ -590,23 +836,32 @@ export class YsTextAnnotation extends LitElement {
         fragments.push(line.content.substring(lastIndex, start))
       }
 
-      // 验证标注内容是否匹配
+      // 验证内容是否匹配
       const actualContent = line.content.substring(start, end)
       if (actualContent === content) {
-        // 添加高亮的标注文本
-        // 如果存在 color，通过 CSS 变量设置，否则使用默认值
-        const styleAttr = color ? `--highlight-color: ${color};` : ''
+        if (type === 'editing') {
+          // 正在编辑的选中文本，使用特殊样式
+          fragments.push(html`<span class="line-selection-highlight">${content}<span class="line-selection-highlight-border"></span></span>`)
+        } else if (annotation) {
+          // 添加高亮的标注文本
+          // 如果存在 color，通过 CSS 变量设置，否则使用默认值
+          const styleAttr = annotation.color ? `--highlight-color: ${annotation.color};` : ''
+          // 如果这个标注区域与正在编辑的选中文本重叠，添加 editing 类
+          const editingClass =
+            isEditingThisLine && this.selectedTextInfo && start === this.selectedTextInfo.start && end === this.selectedTextInfo.end ? ' editing' : ''
 
-        fragments.push(
-          html`<span
-            class="line-highlight"
-            data-anno-id=${`anno-${annotation.id}`}
-            style=${styleAttr}
-            @mouseenter=${this.handleHighlightMouseEnter}
-            @mouseleave=${this.handleHighlightMouseLeave}
-            >${content}<span class="line-highlight-border"></span><span class="line-highlight-desc">${description}</span></span
-          >`
-        )
+          fragments.push(
+            html`<span
+              class="line-highlight${editingClass}"
+              data-anno-id=${`anno-${annotation.id}`}
+              style=${styleAttr}
+              @mouseenter=${this.handleHighlightMouseEnter}
+              @mouseleave=${this.handleHighlightMouseLeave}
+              @contextmenu=${(e: MouseEvent) => this.handleAnnotationContextMenu(e, annotation.id)}
+              >${content}<span class="line-highlight-border"></span><span class="line-highlight-desc">${annotation.type}</span></span
+            >`
+          )
+        }
         lastIndex = end
       } else {
         // 如果内容不匹配，跳过这个标注，不更新lastIndex
@@ -635,12 +890,26 @@ export class YsTextAnnotation extends LitElement {
 
     return html`
       <div class="scroll-container" @scroll=${this.handleScroll}>
+        <!-- <svg width="100" height="100" view="0 0 100 100">
+          <path
+            id="myRedPath"
+            d="M 0 0 L 100 100"
+            fill="transparent"
+            stroke="red"
+            stroke-width="5"
+            @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, '1-2')}
+          ></path>
+        </svg> -->
         <div class="content-wrapper" style="height: ${totalHeight}px;">
+          <!-- SVG 关系层 -->
           <svg
-            class="relationship-layer ${this.isHoveringHighlight ? 'highlighted' : ''}"
+            class="relationship-layer ${this.isHoveringHighlight || this.contextMenuVisible ? 'highlighted' : ''} ${this.isSelectingText
+              ? 'selecting-text'
+              : ''}"
             width="${this.containerWidth}"
             height="${totalHeight}"
             viewBox="0 0 ${this.containerWidth} ${totalHeight}"
+            style="transform: translateY(${offsetTop}px);"
           >
             ${this.relationshipPaths.map(path => {
               if (path.label && path.labelX !== undefined && path.labelY !== undefined && path.labelAngle !== undefined) {
@@ -652,6 +921,7 @@ export class YsTextAnnotation extends LitElement {
                     stroke=${path.color}
                     @mouseenter=${this.handleHighlightMouseEnter}
                     @mouseleave=${this.handleHighlightMouseLeave}
+                    @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
                   ></path>
                   <text
                     class="relationship-label"
@@ -661,6 +931,7 @@ export class YsTextAnnotation extends LitElement {
                     transform=${`rotate(${path.labelAngle} ${path.labelX} ${path.labelY})`}
                     @mouseenter=${this.handleHighlightMouseEnter}
                     @mouseleave=${this.handleHighlightMouseLeave}
+                    @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
                   >${path.label}</text>
                 `
               }
@@ -672,12 +943,46 @@ export class YsTextAnnotation extends LitElement {
                   stroke=${path.color}
                   @mouseenter=${this.handleHighlightMouseEnter}
                   @mouseleave=${this.handleHighlightMouseLeave}
+                  @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
                 ></path>
               `
             })}
           </svg>
-          <div class="virtual-list-layer ${this.isHoveringHighlight ? 'dimmed' : ''}" style="transform: translateY(${offsetTop}px);">
+
+          <!-- 虚拟列表层 （标注节点层） -->
+          <div
+            class="virtual-list-layer ${this.isHoveringHighlight || this.contextMenuVisible ? 'dimmed' : ''}"
+            style="transform: translateY(${offsetTop}px);"
+          >
             ${visibleLines.map(line => html`<div class="line">${this.renderLineContent(line)}</div>`)}
+          </div>
+
+          <!-- 编辑层 -->
+          <div
+            class="edit-layer ${this.editLayerVisible ? '' : 'hidden'}"
+            style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;"
+          >
+            <select required .value=${this.selectedAnnotationType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
+              <option value="" disabled>选择类型</option>
+              ${this.annotationType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+            </select>
+            <input
+              type="text"
+              .value=${this.editInputValue}
+              @input=${this.handleInputChange}
+              @keydown=${this.handleInputKeyDown}
+              placeholder="输入描述（可选）"
+            />
+            <button @click=${this.handleConfirmEdit}>确认</button>
+          </div>
+
+          <!-- 右键菜单层 -->
+          <div
+            class="context-menu ${this.contextMenuVisible ? '' : 'hidden'}"
+            style="left: ${this.contextMenuPosition.x}px; top: ${this.contextMenuPosition.y}px;"
+            @click=${(e: MouseEvent) => e.stopPropagation()}
+          >
+            <button class="context-menu-item delete" @click=${this.handleDelete}>删除</button>
           </div>
         </div>
       </div>
