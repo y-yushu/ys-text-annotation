@@ -38,6 +38,34 @@
 .virtual-list-layer .line {
   pointer-events: auto;
   position: relative;
+  display: flex;
+  align-items: flex-start;
+}
+
+.virtual-list-layer .line-number {
+  flex-shrink: 0;
+  width: 60px;
+  text-align: right;
+  padding-right: 0.75rem;
+  padding-left: 0.5rem;
+  color: #666;
+  font-size: 16px;
+  line-height: 2.5;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.virtual-list-layer .line-content {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 16px;
+  line-height: 2.5;
+  margin: 0;
+  padding: 0;
+  min-height: 1.5em;
+  box-sizing: border-box;
 }
 
 /* 当 dimmed 时，使用遮罩层让 line 变暗，但 line-highlight 不受影响 */
@@ -51,6 +79,12 @@
   background: rgba(255, 255, 255, 0.9);
   pointer-events: none;
   z-index: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* 当 dimmed 时，行号也需要变暗 */
+.virtual-list-layer.dimmed .line-number {
+  opacity: 0.5;
   transition: opacity 0.3s ease;
 }
 
@@ -104,16 +138,6 @@
   cursor: pointer;
   /* label 元素需要响应鼠标事件 */
   pointer-events: all;
-}
-
-.line {
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  line-height: 2.5;
-  margin: 0;
-  padding: 0;
-  min-height: 1.5em;
-  box-sizing: border-box;
 }
 
 .line-highlight {

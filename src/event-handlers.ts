@@ -105,6 +105,10 @@ export function handleTextSelection(params: HandleTextSelectionParams): void {
   }
   if (!lineElement) return
 
+  // 找到 line-content 元素（实际包含文本内容的元素）
+  const lineContentElement = lineElement.querySelector('.line-content') as HTMLElement
+  if (!lineContentElement) return
+
   // 找到 line 在虚拟列表中的索引
   const lineParent = lineElement.parentElement
   if (!lineParent) return
@@ -116,10 +120,10 @@ export function handleTextSelection(params: HandleTextSelectionParams): void {
   const lineContent = lines[actualLineIndex]?.content || ''
   if (!lineContent) return
 
-  // 计算选中文本在 line 文本中的位置
-  // 由于 line 中可能包含标注元素，我们需要找到选中文本在原始 lineContent 中的位置
-  let startOffset = getTextOffsetInLine(lineElement, range.startContainer, range.startOffset)
-  let endOffset = getTextOffsetInLine(lineElement, range.endContainer, range.endOffset)
+  // 计算选中文本在 line-content 文本中的位置
+  // 由于 line-content 中可能包含标注元素，我们需要找到选中文本在原始 lineContent 中的位置
+  let startOffset = getTextOffsetInLine(lineContentElement, range.startContainer, range.startOffset)
+  let endOffset = getTextOffsetInLine(lineContentElement, range.endContainer, range.endOffset)
 
   // 如果选中的文本经过 trim，需要调整 start 和 end 来匹配 trim 后的内容
   // 找到 trim 后的文本在原始文本中的实际位置

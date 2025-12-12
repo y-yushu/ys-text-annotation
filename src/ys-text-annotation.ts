@@ -44,8 +44,13 @@ export class YsTextAnnotation extends LitElement {
   @property()
   content = mockContent
 
+  // 是否启用编辑
   @property({ type: Boolean })
-  editingEnabled = false
+  editingEnabled = true
+
+  // 是否显示行号
+  @property({ type: Boolean })
+  showLineNumber = true
 
   @state()
   private lines: LineItem[] = []
@@ -1288,7 +1293,15 @@ export class YsTextAnnotation extends LitElement {
             class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}"
             style="transform: translateY(${offsetTop}px); padding-bottom: ${bottomPadding}px;"
           >
-            ${visibleLines.map(line => html`<div class="line">${this.renderLineContent(line)}</div>`)}
+            <!-- ${visibleLines.map(line => html`<div class="line">${this.renderLineContent(line)}</div>`)} -->
+            ${visibleLines.map(
+              line => html`
+                <div class="line">
+                  ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
+                  <span class="line-content">${this.renderLineContent(line)}</span>
+                </div>
+              `
+            )}
           </div>
 
           <!-- 编辑层 -->
