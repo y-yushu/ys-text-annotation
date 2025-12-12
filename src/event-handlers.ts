@@ -5,11 +5,11 @@ import { getShadowDOMSelection, getTextOffsetInLine } from './utils'
 
 // 文本选择处理参数
 export interface HandleTextSelectionParams {
-  editingEnabled: boolean
   savedRange: Range | null
   shadowRoot: ShadowRoot | null
   visibleStartIndex: number
   lines: Array<{ id: number; content: string }>
+  annotations: AnnotationItem[]
   onSelectionProcessed: (info: SelectedTextInfo) => void
   onEditLayerPositionUpdate: () => void
   onEditLayerShow: () => void
@@ -17,23 +17,46 @@ export interface HandleTextSelectionParams {
 }
 
 /**
+ * 检查选中的文本范围是否与已标注的内容重叠
+ */
+function hasOverlapWithAnnotations(
+  lineId: number,
+  start: number,
+  end: number,
+  annotations: AnnotationItem[]
+): boolean {
+  // 查找同一行的所有标注
+  const lineAnnotations = annotations.filter(ann => ann.lineId === lineId)
+  
+  // 检查是否与任何标注重叠
+  // 两个范围 [a1, a2] 和 [b1, b2] 重叠的条件是：a1 <= b2 && a2 >= b1
+  for (const annotation of lineAnnotations) {
+    if (start <= annotation.end && end >= annotation.start) {
+      return true
+    }
+  }
+  
+  return false
+}
+
+/**
  * 处理文本选择事件
  */
 export function handleTextSelection(params: HandleTextSelectionParams): void {
   const {
-    editingEnabled,
     savedRange,
     shadowRoot,
     visibleStartIndex,
     lines,
+    annotations,
     onSelectionProcessed,
     onEditLayerPositionUpdate,
     onEditLayerShow,
     onFocusSelect
   } = params
 
-  // 如果编辑状态未开启，不允许选中文本进行编辑
-  if (!editingEnabled || !savedRange) {
+  // 如果 savedRange 不存在，直接返回
+  if (!savedRange) {
     return
   }
 
@@ -121,6 +144,12 @@ export function handleTextSelection(params: HandleTextSelectionParams): void {
     content: selectedText
   }
 
+  // 检查选中的文本是否与已标注的内容重叠
+  if (hasOverlapWithAnnotations(actualLineIndex, startOffset, endOffset, annotations)) {
+    // 如果与已标注内容重叠，不显示编辑层
+    return
+  }
+
   onSelectionProcessed(selectedTextInfo)
   onEditLayerPositionUpdate()
   onEditLayerShow()
@@ -134,7 +163,10 @@ export interface HandleConfirmEditParams {
   editInputValue: string
   annotationTypes: AnnotationType[]
   shadowRoot: ShadowRoot | null
+  isEditing?: boolean
+  editingAnnotationId?: string
   onAnnotationCreated: (annotation: AnnotationItem) => void
+  onAnnotationUpdated?: (annotation: AnnotationItem) => void
   onEditLayerHide: () => void
 }
 
@@ -142,7 +174,18 @@ export interface HandleConfirmEditParams {
  * 处理确认按钮点击
  */
 export function handleConfirmEdit(params: HandleConfirmEditParams): void {
-  const { selectedAnnotationType, selectedTextInfo, editInputValue, annotationTypes, shadowRoot, onAnnotationCreated, onEditLayerHide } = params
+  const {
+    selectedAnnotationType,
+    selectedTextInfo,
+    editInputValue,
+    annotationTypes,
+    shadowRoot,
+    isEditing = false,
+    editingAnnotationId,
+    onAnnotationCreated,
+    onAnnotationUpdated,
+    onEditLayerHide
+  } = params
 
   // 验证下拉选择框是否已选择（必填）
   if (!selectedAnnotationType || !selectedTextInfo) {
@@ -155,20 +198,36 @@ export function handleConfirmEdit(params: HandleConfirmEditParams): void {
 
   const trimmedDescription = editInputValue.trim()
 
-  const newId = `anno-${Date.now()}`
-  const newAnnotation: AnnotationItem = {
-    id: newId,
-    lineId: selectedTextInfo.lineId,
-    start: selectedTextInfo.start,
-    end: selectedTextInfo.end,
-    content: selectedTextInfo.content,
-    type: selectedAnnotationType,
-    description: trimmedDescription,
-    color: typeColor
+  if (isEditing && editingAnnotationId) {
+    // 编辑模式：更新已有标注
+    if (onAnnotationUpdated) {
+      const updatedAnnotation: AnnotationItem = {
+        id: editingAnnotationId,
+        lineId: selectedTextInfo.lineId,
+        start: selectedTextInfo.start,
+        end: selectedTextInfo.end,
+        content: selectedTextInfo.content,
+        type: selectedAnnotationType,
+        description: trimmedDescription,
+        color: typeColor
+      }
+      onAnnotationUpdated(updatedAnnotation)
+    }
+  } else {
+    // 创建模式：创建新标注
+    const newId = `anno-${Date.now()}`
+    const newAnnotation: AnnotationItem = {
+      id: newId,
+      lineId: selectedTextInfo.lineId,
+      start: selectedTextInfo.start,
+      end: selectedTextInfo.end,
+      content: selectedTextInfo.content,
+      type: selectedAnnotationType,
+      description: trimmedDescription,
+      color: typeColor
+    }
+    onAnnotationCreated(newAnnotation)
   }
-
-  // 创建标注
-  onAnnotationCreated(newAnnotation)
 
   // 清除文本选择（使用 Shadow DOM 的选择）
   const selection = getShadowDOMSelection(shadowRoot)

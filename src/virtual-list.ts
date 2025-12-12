@@ -29,16 +29,31 @@ export function updateVisibleRange(params: UpdateVisibleRangeParams): UpdateVisi
 
   const { scrollTop, clientHeight } = scrollContainer
   const containerHeight = clientHeight || currentContainerHeight
-  const totalHeight = getTotalHeight(lines.length, lineHeight, containerHeight)
   const buffer = VIRTUAL_LIST_CONFIG.BUFFER_SIZE
+
+  // 计算内容实际高度（不包含底部额外空间）
+  const contentHeight = lines.length * lineHeight
+
+  // 计算当前滚动位置距离底部内容的距离
+  // 当 scrollTop + containerHeight 接近 contentHeight 时，认为接近底部
+  const distanceToContentBottom = contentHeight - (scrollTop + containerHeight)
+  const isNearBottom = distanceToContentBottom <= VIRTUAL_LIST_CONFIG.BOTTOM_THRESHOLD
 
   // 计算可见区域的行索引范围
   let startIndex = Math.max(0, Math.floor(scrollTop / lineHeight) - buffer)
   let endIndex = Math.ceil((scrollTop + containerHeight) / lineHeight) + buffer
 
-  // 接近底部时，确保包含最后一行
-  const isNearBottom = scrollTop + containerHeight >= totalHeight - VIRTUAL_LIST_CONFIG.BOTTOM_THRESHOLD
-  endIndex = isNearBottom ? lines.length - 1 : Math.min(lines.length - 1, endIndex)
+  // 接近底部时，确保包含最后一行，并且确保最后一行有足够的缓冲区
+  if (isNearBottom) {
+    // 确保 endIndex 包含最后一行
+    endIndex = lines.length - 1
+    // 确保 startIndex 不会太大，这样最后一行就能在可视区域内
+    // 计算要显示最后一行所需的最小 startIndex
+    const minStartForLastLine = Math.max(0, lines.length - 1 - Math.ceil(containerHeight / lineHeight) - buffer)
+    startIndex = Math.max(0, Math.min(startIndex, minStartForLastLine + buffer))
+  } else {
+    endIndex = Math.min(lines.length - 1, endIndex)
+  }
 
   // 确保索引范围有效
   startIndex = Math.min(startIndex, endIndex)
@@ -52,12 +67,10 @@ export function updateVisibleRange(params: UpdateVisibleRangeParams): UpdateVisi
 }
 
 /**
- * 计算总高度
+ * 计算总高度（纯内容高度，底部留白通过 CSS padding-bottom 实现）
  */
-export function getTotalHeight(linesCount: number, lineHeight: number, containerHeight: number): number {
-  const contentHeight = linesCount * lineHeight
-  const extraBottomSpace = containerHeight * VIRTUAL_LIST_CONFIG.BOTTOM_EXTRA_RATIO
-  return contentHeight + extraBottomSpace
+export function getTotalHeight(linesCount: number, lineHeight: number): number {
+  return linesCount * lineHeight
 }
 
 /**
@@ -66,4 +79,3 @@ export function getTotalHeight(linesCount: number, lineHeight: number, container
 export function getOffsetTop(index: number, lineHeight: number): number {
   return index * lineHeight
 }
-

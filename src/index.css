@@ -162,6 +162,51 @@
   box-shadow: 0 0 8px rgba(255, 107, 107, 0.6);
 }
 
+/* 关系创建时的起点标注高亮 */
+.line-highlight.creating-relationship-start {
+  animation: relationship-start-pulse 1s ease-in-out infinite;
+}
+
+.line-highlight.creating-relationship-start .line-highlight-border {
+  border-width: 3px;
+  box-shadow: 0 0 12px rgba(193, 44, 31, 0.8);
+}
+
+/* 关系创建时悬停的标注高亮 */
+.line-highlight.creating-relationship-hover {
+  animation: relationship-hover-pulse 0.8s ease-in-out infinite;
+}
+
+.line-highlight.creating-relationship-hover .line-highlight-border {
+  border-width: 3px;
+  box-shadow: 0 0 12px rgba(44, 193, 31, 0.8);
+}
+
+@keyframes relationship-start-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes relationship-hover-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* 临时关系路径样式 */
+.temp-relationship-path {
+  pointer-events: none;
+}
+
 @keyframes editing-pulse {
   0%,
   100% {
@@ -211,10 +256,6 @@
   pointer-events: all;
   flex-wrap: nowrap;
   white-space: nowrap;
-}
-
-.edit-layer.hidden {
-  display: none;
 }
 
 .edit-layer select,
@@ -284,10 +325,6 @@
   overflow: hidden;
 }
 
-.context-menu.hidden {
-  display: none;
-}
-
 .context-menu-item {
   padding: 0.5rem 1rem;
   font-size: 14px;
@@ -302,6 +339,30 @@
 
 .context-menu-item:hover {
   background: #f5f5f5;
+}
+
+.context-menu-item.create-relationship {
+  color: #2d0bdf;
+}
+
+.context-menu-item.create-relationship:hover {
+  background: #e8e5ff;
+}
+
+.context-menu-item.edit-annotation {
+  color: #2d0bdf;
+}
+
+.context-menu-item.edit-annotation:hover {
+  background: #e8e5ff;
+}
+
+.context-menu-item.edit-relationship {
+  color: #2d0bdf;
+}
+
+.context-menu-item.edit-relationship:hover {
+  background: #e8e5ff;
 }
 
 .context-menu-item.delete {

@@ -22,13 +22,15 @@ export interface RenderLineContentParams {
   onHighlightMouseEnter: () => void
   onHighlightMouseLeave: () => void
   onAnnotationContextMenu: (e: MouseEvent, annotationId: string) => void
+  relationshipStartAnnotationId: string | null
+  hoveredAnnotationId: string | null
 }
 
 /**
  * 渲染行内容，如果有标注则高亮显示
  */
 export function renderLineContent(params: RenderLineContentParams): string | TemplateResult {
-  const { line, annotations, isEditingThisLine, selectedTextInfo, onHighlightMouseEnter, onHighlightMouseLeave, onAnnotationContextMenu } = params
+  const { line, annotations, isEditingThisLine, selectedTextInfo, onHighlightMouseEnter, onHighlightMouseLeave, onAnnotationContextMenu, relationshipStartAnnotationId, hoveredAnnotationId } = params
 
   const lineAnnotations = getAnnotationsByLineId(annotations, line.id)
 
@@ -112,9 +114,14 @@ export function renderLineContent(params: RenderLineContentParams): string | Tem
         // 如果这个标注区域与正在编辑的选中文本重叠，添加 editing 类
         const editingClass = isEditingThisLine && selectedTextInfo && start === selectedTextInfo.start && end === selectedTextInfo.end ? ' editing' : ''
 
+        // 判断是否需要高亮（起点标注或悬停的标注）
+        const isStartAnnotation = relationshipStartAnnotationId === annotation.id
+        const isHoveredAnnotation = hoveredAnnotationId === annotation.id
+        const highlightClass = isStartAnnotation ? ' creating-relationship-start' : isHoveredAnnotation ? ' creating-relationship-hover' : ''
+
         fragments.push(
           html`<span
-            class="line-highlight${editingClass}"
+            class="line-highlight${editingClass}${highlightClass}"
             data-anno-id=${`anno-${annotation.id}`}
             style=${styleAttr}
             @mouseenter=${onHighlightMouseEnter}

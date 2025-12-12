@@ -231,32 +231,100 @@ export interface ContextMenuPosition {
 export function calculateContextMenuPosition(
   e: MouseEvent,
   contentWrapper: HTMLElement,
+  scrollContainer?: HTMLElement,
   menuWidth: number = 120,
   menuHeight: number = 40
 ): ContextMenuPosition {
   const contentWrapperRect = contentWrapper.getBoundingClientRect()
+  const scrollContainerRect = scrollContainer?.getBoundingClientRect() || contentWrapperRect
+  
+  // 计算菜单相对于 contentWrapper 的位置
+  // 使用鼠标事件的 clientX/clientY 和 contentWrapper 的 getBoundingClientRect
   let menuX = e.clientX - contentWrapperRect.left
   let menuY = e.clientY - contentWrapperRect.top
 
-  // 调整菜单位置，确保不超出可视区域
-  // 检查右边界
-  if (menuX + menuWidth > contentWrapperRect.width) {
-    menuX = contentWrapperRect.width - menuWidth
+  // 调整菜单位置，确保不超出滚动容器的可视区域
+  // 计算滚动容器的可视区域相对于 contentWrapper 的位置
+  const scrollViewportTop = scrollContainerRect.top - contentWrapperRect.top
+  const scrollViewportBottom = scrollViewportTop + scrollContainerRect.height
+  const scrollViewportLeft = scrollContainerRect.left - contentWrapperRect.left
+  const scrollViewportRight = scrollViewportLeft + scrollContainerRect.width
+
+  // 检查右边界（相对于滚动容器可视区域）
+  if (menuX + menuWidth > scrollViewportRight) {
+    menuX = scrollViewportRight - menuWidth
   }
   // 检查左边界
-  if (menuX < 0) {
-    menuX = 0
+  if (menuX < scrollViewportLeft) {
+    menuX = scrollViewportLeft
   }
-  // 检查下边界
-  if (menuY + menuHeight > contentWrapperRect.height) {
-    menuY = contentWrapperRect.height - menuHeight
+  // 检查下边界（相对于滚动容器可视区域）
+  if (menuY + menuHeight > scrollViewportBottom) {
+    menuY = scrollViewportBottom - menuHeight
   }
   // 检查上边界
-  if (menuY < 0) {
-    menuY = 0
+  if (menuY < scrollViewportTop) {
+    menuY = scrollViewportTop
   }
 
   return { x: menuX, y: menuY }
+}
+
+/**
+ * 从点坐标计算编辑层位置（用于关系编辑等场景）
+ */
+export function calculateEditLayerPositionFromPoint(
+  point: { x: number; y: number },
+  scrollContainer: HTMLElement,
+  contentWrapper: HTMLElement
+): EditLayerPosition {
+  const contentWrapperRect = contentWrapper.getBoundingClientRect()
+  const scrollContainerRect = scrollContainer.getBoundingClientRect()
+
+  // 计算编辑层相对于 content-wrapper 的位置
+  let editLayerX = point.x
+  let editLayerY = point.y
+
+  // 获取编辑层的尺寸（估算）
+  // 下拉框(120px) + 输入框(200px) + 按钮(80px) + 间距(20px) ≈ 420px
+  const editLayerHeight = 50
+  const editLayerWidth = 420
+
+  // 检查并调整位置，确保编辑层不超出可视范围
+  let finalX = editLayerX
+  let finalY = editLayerY
+
+  // 检查右边界
+  const maxX = contentWrapperRect.width - editLayerWidth
+  if (finalX > maxX) {
+    finalX = maxX
+  }
+  // 检查左边界
+  if (finalX < 0) {
+    finalX = 0
+  }
+
+  // 检查下边界（相对于滚动容器的可视区域）
+  const scrollViewportBottom = scrollContainerRect.bottom - contentWrapperRect.top
+  if (finalY + editLayerHeight > scrollViewportBottom) {
+    // 如果下方空间不足，尝试显示在上方
+    const editLayerYAbove = point.y - editLayerHeight - 5
+    const scrollViewportTop = scrollContainerRect.top - contentWrapperRect.top
+    if (editLayerYAbove >= scrollViewportTop) {
+      // 上方有足够空间
+      finalY = editLayerYAbove
+    } else {
+      // 上下都没有足够空间，调整到可视区域内
+      finalY = Math.max(scrollViewportTop, scrollViewportBottom - editLayerHeight)
+    }
+  }
+  // 检查上边界
+  const scrollViewportTop = scrollContainerRect.top - contentWrapperRect.top
+  if (finalY < scrollViewportTop) {
+    finalY = scrollViewportTop + 5
+  }
+
+  return { x: finalX, y: finalY }
 }
 
 /**
