@@ -962,11 +962,14 @@ export class YsTextAnnotation extends LitElement {
     // 如果 editingEnabled 为 false，不允许切换模式
     if (!this.editingEnabled || !this.scrollContainer) return
 
+    // 确保 annotationId 不包含 'anno-' 前缀（统一格式）
+    const normalizedAnnotationId = annotationId.replace(/^anno-/, '')
+
     const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
     if (!virtualListLayer) return
 
     // 查找起点标注元素
-    const startElement = this.shadowRoot?.querySelector(`[data-anno-id="anno-${annotationId}"]`) as HTMLElement
+    const startElement = this.shadowRoot?.querySelector(`[data-anno-id="anno-${normalizedAnnotationId}"]`) as HTMLElement
     if (!startElement) return
 
     // 获取起点位置
@@ -974,7 +977,7 @@ export class YsTextAnnotation extends LitElement {
 
     // 切换到创建关系模式
     this.functionMode = FunctionMode.CREATING_RELATIONSHIP
-    this.relationshipStartAnnotationId = annotationId
+    this.relationshipStartAnnotationId = normalizedAnnotationId
     this.tempRelationshipPath = {
       d: '',
       startPos,
@@ -1135,12 +1138,16 @@ export class YsTextAnnotation extends LitElement {
   private completeRelationshipCreation(endAnnotationId: string) {
     if (!this.relationshipStartAnnotationId) return
 
+    // 确保 endAnnotationId 不包含 'anno-' 前缀（统一格式）
+    // endAnnotationId 已经在 handleRelationshipClick 中去掉了前缀，但为了安全起见再次确保
+    const normalizedEndId = endAnnotationId.replace(/^anno-/, '')
+
     // 查找默认关系类型
     const defaultRelationshipType = this.relationshipType[0]
     const newRelationship: RelationshipItem = {
       id: `rel-${Date.now()}`,
-      startId: this.relationshipStartAnnotationId,
-      endId: endAnnotationId,
+      startId: this.relationshipStartAnnotationId, // 已经在 startRelationshipCreation 中规范化
+      endId: normalizedEndId,
       type: defaultRelationshipType?.type || '',
       description: '',
       color: defaultRelationshipType?.color || '#c12c1f'
