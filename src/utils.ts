@@ -1,4 +1,6 @@
 // 工具函数集合
+import type { AnnotationItem, AnnotationType } from './types'
+import { VIRTUAL_LIST_CONFIG } from './types'
 
 /**
  * 获取 Shadow DOM 内的选择
@@ -411,4 +413,215 @@ export function measureLineHeight(container: HTMLElement): number {
  */
 export function getAnnotationsByLineId<T extends { lineId: number }>(annotations: T[], lineId: number): T[] {
   return annotations.filter(annotation => annotation.lineId === lineId)
+}
+
+/**
+ * 检查选中的文本范围是否与已标注的内容重叠
+ */
+export function hasOverlapWithAnnotations(lineId: number, start: number, end: number, annotations: AnnotationItem[]): boolean {
+  // 查找同一行的所有标注
+  const lineAnnotations = annotations.filter(ann => ann.lineId === lineId)
+
+  // 检查是否与任何标注重叠
+  // 两个范围 [a1, a2] 和 [b1, b2] 重叠的条件是：a1 <= b2 && a2 >= b1
+  for (const annotation of lineAnnotations) {
+    if (start <= annotation.end && end >= annotation.start) {
+      return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * 获取元素中心相对于 virtualListLayer 的坐标
+ */
+export function getElementCenterPosition(element: HTMLElement, virtualListLayer: HTMLElement): { x: number; y: number } {
+  const elementRect = element.getBoundingClientRect()
+  const layerRect = virtualListLayer.getBoundingClientRect()
+
+  const centerX = elementRect.left + elementRect.width / 2 - layerRect.left
+  const centerY = elementRect.top + elementRect.height / 2 - layerRect.top
+
+  return { x: centerX, y: centerY }
+}
+
+/**
+ * 查找包含标注的元素
+ */
+export function findAnnotationElement(element: Element | null): HTMLElement | null {
+  if (!element) return null
+  if (element.classList.contains('line-highlight')) {
+    return element as HTMLElement
+  }
+  return findAnnotationElement(element.parentElement)
+}
+
+/**
+ * 获取合并标注的提示文本
+ */
+export function getGroupTooltip(annotations: AnnotationItem[]): string {
+  if (annotations.length === 1) {
+    const ann = annotations[0]
+    return `行号: ${ann.lineId + 1}, 类型: ${ann.type}`
+  }
+  const lineNumbers = annotations.map(ann => ann.lineId + 1).sort((a, b) => a - b)
+  const types = [...new Set(annotations.map(ann => ann.type))].join(', ')
+  return `共 ${annotations.length} 个标注\n行号: ${lineNumbers.join(', ')}\n类型: ${types}`
+}
+
+/**
+ * 计算总高度
+ */
+export function getTotalHeight(linesLength: number, lineHeight: number): number {
+  return linesLength * lineHeight
+}
+
+/**
+ * 计算底部填充
+ */
+export function getBottomPadding(containerHeight: number): number {
+  return containerHeight * VIRTUAL_LIST_CONFIG.BOTTOM_EXTRA_RATIO
+}
+
+/**
+ * 计算偏移顶部
+ */
+export function getOffsetTop(index: number, lineHeight: number): number {
+  return index * lineHeight
+}
+
+/**
+ * 更新可见范围
+ */
+export interface UpdateVisibleRangeParams {
+  scrollContainer: HTMLElement
+  lines: Array<unknown>
+  lineHeight: number
+  containerHeight: number
+}
+
+export interface UpdateVisibleRangeResult {
+  visibleStartIndex: number
+  visibleEndIndex: number
+  containerHeight: number
+}
+
+export function updateVisibleRange(params: UpdateVisibleRangeParams): UpdateVisibleRangeResult | null {
+  const { scrollContainer, lines, lineHeight, containerHeight: currentContainerHeight } = params
+
+  if (!scrollContainer || lines.length === 0) {
+    return null
+  }
+
+  const { scrollTop, clientHeight } = scrollContainer
+  const containerHeight = clientHeight || currentContainerHeight
+  const buffer = VIRTUAL_LIST_CONFIG.BUFFER_SIZE
+
+  // 计算内容实际高度（不包含底部额外空间）
+  const contentHeight = lines.length * lineHeight
+
+  // 计算当前滚动位置距离底部内容的距离
+  // 当 scrollTop + containerHeight 接近 contentHeight 时，认为接近底部
+  const distanceToContentBottom = contentHeight - (scrollTop + containerHeight)
+  const isNearBottom = distanceToContentBottom <= VIRTUAL_LIST_CONFIG.BOTTOM_THRESHOLD
+
+  // 计算可见区域的行索引范围
+  let startIndex = Math.max(0, Math.floor(scrollTop / lineHeight) - buffer)
+  let endIndex = Math.ceil((scrollTop + containerHeight) / lineHeight) + buffer
+
+  // 接近底部时，确保包含最后一行，并且确保最后一行有足够的缓冲区
+  if (isNearBottom) {
+    // 确保 endIndex 包含最后一行
+    endIndex = lines.length - 1
+    // 确保 startIndex 不会太大，这样最后一行就能在可视区域内
+    // 计算要显示最后一行所需的最小 startIndex
+    const minStartForLastLine = Math.max(0, lines.length - 1 - Math.ceil(containerHeight / lineHeight) - buffer)
+    startIndex = Math.max(0, Math.min(startIndex, minStartForLastLine + buffer))
+  } else {
+    endIndex = Math.min(lines.length - 1, endIndex)
+  }
+
+  // 确保索引范围有效
+  startIndex = Math.min(startIndex, endIndex)
+  endIndex = Math.max(startIndex, endIndex)
+
+  return {
+    visibleStartIndex: startIndex,
+    visibleEndIndex: endIndex,
+    containerHeight
+  }
+}
+
+/**
+ * 更新分组标注
+ */
+export interface GroupedAnnotation {
+  segmentIndex: number
+  annotations: AnnotationItem[]
+  positionPercent: number
+}
+
+export function updateGroupedAnnotations(lines: Array<{ id: number }>, annotations: AnnotationItem[]): GroupedAnnotation[] {
+  if (lines.length === 0) {
+    return []
+  }
+
+  if (annotations.length === 0) {
+    return []
+  }
+
+  const SEGMENT_COUNT = 100
+  const segments: Map<number, AnnotationItem[]> = new Map()
+
+  // 将每个标注分配到对应的段
+  for (const annotation of annotations) {
+    // 计算标注属于哪个段（0-99）
+    // 使用 Math.min 确保最后一行也能正确映射到最后一个段
+    const segmentIndex = Math.min(Math.floor((annotation.lineId / lines.length) * SEGMENT_COUNT), SEGMENT_COUNT - 1)
+
+    if (!segments.has(segmentIndex)) {
+      segments.set(segmentIndex, [])
+    }
+    segments.get(segmentIndex)!.push(annotation)
+  }
+
+  // 转换为数组并计算位置百分比
+  return Array.from(segments.entries()).map(([segmentIndex, annotations]) => {
+    // 计算该段的中心位置百分比
+    const positionPercent = ((segmentIndex + 0.5) / SEGMENT_COUNT) * 100
+    return {
+      segmentIndex,
+      annotations,
+      positionPercent
+    }
+  })
+}
+
+/**
+ * 获取标注的颜色（用于合并显示时选择主要颜色）
+ */
+export function getGroupColor(annotations: AnnotationItem[], annotationTypes: AnnotationType[]): string {
+  // 优先使用第一个标注的颜色
+  if (annotations.length > 0) {
+    const firstAnnotation = annotations[0]
+    if (firstAnnotation.color) {
+      return firstAnnotation.color
+    }
+    const annotationType = annotationTypes.find(type => type.type === firstAnnotation.type)
+    return annotationType?.color || '#3271ae'
+  }
+  return '#3271ae'
+}
+
+/**
+ * 获取单个标注的颜色
+ */
+export function getAnnotationColor(annotation: AnnotationItem, annotationTypes: AnnotationType[]): string {
+  if (annotation.color) {
+    return annotation.color
+  }
+  // 如果没有指定颜色，从标注类型中查找
+  const annotationType = annotationTypes.find(type => type.type === annotation.type)
+  return annotationType?.color || '#3271ae'
 }
