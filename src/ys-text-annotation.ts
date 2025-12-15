@@ -87,6 +87,27 @@ export class YsTextAnnotation extends LitElement {
   @state()
   private visibleLayerHeight = 0
 
+  /**
+   * 分组后的标注数据（按100份分组）
+   * 格式：{ segmentIndex: number, annotations: AnnotationItem[], positionPercent: number }
+   */
+  @state()
+  private groupedAnnotations: Array<{
+    segmentIndex: number
+    annotations: AnnotationItem[]
+    positionPercent: number
+  }> = []
+
+  /**
+   * 当前选中的标注分组（用于显示标注列表）
+   */
+  @state()
+  private selectedGroup: {
+    annotations: AnnotationItem[]
+    positionPercent: number
+    markerPosition: { x: number; y: number }
+  } | null = null
+
   // ==================== 控制器状态 ====================
 
   /**
@@ -229,6 +250,8 @@ export class YsTextAnnotation extends LitElement {
       this.updateLines()
       this.hasInitializedLines = true
     }
+    // 确保分组数据已初始化
+    this.updateGroupedAnnotations()
   }
 
   disconnectedCallback() {
@@ -264,6 +287,11 @@ export class YsTextAnnotation extends LitElement {
     if (!this.editingEnabled && this.functionMode !== FunctionMode.DEFAULT) {
       this.functionMode = FunctionMode.DEFAULT
       this.resetToDefaultMode()
+    }
+
+    // 当 annotations 或 lines 变化时，更新分组
+    if (changedProperties.has('annotations') || changedProperties.has('lines')) {
+      this.updateGroupedAnnotations()
     }
 
     if (
@@ -373,6 +401,24 @@ export class YsTextAnnotation extends LitElement {
           return
         }
 
+        // 关闭标注列表（如果点击的不是列表内的元素或标记）
+        if (this.selectedGroup) {
+          const annotationListPopup = this.shadowRoot?.querySelector('.annotation-list-popup') as HTMLElement
+          const annotationMarkers = this.shadowRoot?.querySelectorAll('.annotation-marker') as NodeListOf<HTMLElement>
+          if (annotationListPopup) {
+            const path = e.composedPath()
+            const clickedInPopup = path.includes(annotationListPopup) || path.some(node => node instanceof Node && annotationListPopup.contains(node))
+            const clickedInMarker = Array.from(annotationMarkers).some(
+              marker => path.includes(marker) || path.some(node => node instanceof Node && marker.contains(node))
+            )
+
+            // 如果点击的不是弹窗和标记，则关闭列表
+            if (!clickedInPopup && !clickedInMarker) {
+              this.closeAnnotationList()
+            }
+          }
+        }
+
         // 关闭右键菜单
         if (this.functionMode === FunctionMode.CONTEXT_MENU_OPEN) {
           this.resetToDefaultMode()
@@ -403,6 +449,7 @@ export class YsTextAnnotation extends LitElement {
       id: index,
       content: content
     }))
+    console.log('🚀 ~ YsTextAnnotation ~ updateLines ~ this.lines:', this.lines)
     if (this.scrollContainer) {
       this.measureLineHeight()
       this.updateVisibleRange()
@@ -418,8 +465,8 @@ export class YsTextAnnotation extends LitElement {
     this.updateTimer && cancelAnimationFrame(this.updateTimer)
     this.updateTimer = requestAnimationFrame(() => {
       this.updateVisibleRange()
-      // 如果编辑层可见，重新计算位置
-      if (this.editLayerVisible && this.savedRange) {
+      // 如果编辑层可见，重新计算位置（仅创建模式，编辑模式不重新定位）
+      if (this.editLayerVisible && this.savedRange && !this.editingAnnotationId) {
         this.updateEditLayerPosition()
       }
       // 滚动时，如果处于右键菜单或创建关系模式，重置到默认模式
@@ -532,29 +579,20 @@ export class YsTextAnnotation extends LitElement {
       visibleStartIndex: this.visibleStartIndex,
       lines: this.lines,
       annotations: this.annotations,
-      onSelectionProcessed: (info: SelectedTextInfo) => {
-        this.selectedTextInfo = info
-      },
-      onEditLayerPositionUpdate: () => {
-        this.updateEditLayerPosition()
-      },
-      onEditLayerShow: () => {
+      onEditLayerShow: (info: SelectedTextInfo) => {
         // 再次检查 editingEnabled，防止在异步回调中状态已改变
         if (!this.editingEnabled) {
           return
         }
+        // 保存选中的文本信息
+        this.selectedTextInfo = info
+        // 更新编辑层位置
+        this.updateEditLayerPosition()
+        // 重置编辑层状态
         this.editInputValue = ''
         this.selectedAnnotationType = ''
         // 切换到创建标注模式
         this.functionMode = FunctionMode.CREATING_ANNOTATION
-      },
-      onFocusSelect: () => {
-        this.updateComplete.then(() => {
-          const select = this.shadowRoot?.querySelector('.edit-layer select') as HTMLSelectElement
-          if (select) {
-            select.focus()
-          }
-        })
       }
     })
   }
@@ -563,12 +601,21 @@ export class YsTextAnnotation extends LitElement {
    * 更新编辑层位置（用于滚动时重新定位）
    */
   private updateEditLayerPosition() {
-    if (!this.savedRange || !this.scrollContainer) return
+    if (!this.scrollContainer) return
 
     const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
     if (!contentWrapper) return
 
-    this.editLayerPosition = calculateEditLayerPosition(this.savedRange, this.scrollContainer, contentWrapper)
+    // 编辑模式：不需要重新定位，编辑层位置在初始化时已设置
+    // 编辑标注时，编辑层位置固定，不随滚动改变
+    if (this.editingAnnotationId) {
+      return
+    }
+
+    // 创建模式：使用 Range 重新定位
+    if (this.savedRange) {
+      this.editLayerPosition = calculateEditLayerPosition(this.savedRange, this.scrollContainer, contentWrapper)
+    }
   }
 
   /**
@@ -675,10 +722,10 @@ export class YsTextAnnotation extends LitElement {
     // 重置文本选择状态，确保右键菜单可以正常显示
     this.isSelectingText = false
 
-    const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-    if (!contentWrapper) return
+    const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
+    if (!mainContainer) return
 
-    this.contextMenuPosition = calculateContextMenuPosition(e, contentWrapper, this.scrollContainer)
+    this.contextMenuPosition = calculateContextMenuPosition(e, mainContainer, this.scrollContainer)
 
     this.contextMenuTarget = {
       type: 'annotation',
@@ -709,10 +756,10 @@ export class YsTextAnnotation extends LitElement {
     // 重置文本选择状态，确保右键菜单可以正常显示
     this.isSelectingText = false
 
-    const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-    if (!contentWrapper) return
+    const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
+    if (!mainContainer) return
 
-    this.contextMenuPosition = calculateContextMenuPosition(e, contentWrapper, this.scrollContainer)
+    this.contextMenuPosition = calculateContextMenuPosition(e, mainContainer, this.scrollContainer)
 
     this.contextMenuTarget = {
       type: 'relationship',
@@ -767,14 +814,6 @@ export class YsTextAnnotation extends LitElement {
     } else {
       this.editLayerPosition = menuPosition
     }
-
-    // 聚焦到选择框
-    this.updateComplete.then(() => {
-      const select = this.shadowRoot?.querySelector('.edit-layer select') as HTMLSelectElement
-      if (select) {
-        select.focus()
-      }
-    })
   }
 
   /**
@@ -826,107 +865,29 @@ export class YsTextAnnotation extends LitElement {
       content: annotation.content
     }
 
-    // 清理右键菜单目标（先清理，避免影响后续查找）
-    const annotationIdToEdit = this.contextMenuTarget.id
+    // 保存右键菜单位置，用于初始化编辑层位置
+    // 编辑标注时，直接使用右键菜单的位置，不查找元素，避免触发滚动
+    const menuPosition = { ...this.contextMenuPosition }
+
+    // 清理右键菜单目标
     this.contextMenuTarget = null
 
     // 切换到创建/编辑标注模式（先切换模式，让编辑层渲染）
     // 通过 editingAnnotationId 区分是新增还是编辑
     this.functionMode = FunctionMode.CREATING_ANNOTATION
 
-    // 等待 DOM 更新后定位编辑层
-    this.updateComplete.then(() => {
-      // 使用 requestAnimationFrame 确保 DOM 完全渲染
-      requestAnimationFrame(() => {
-        // 查找对应的标注元素来定位编辑层
-        const annotationElement = this.shadowRoot?.querySelector(`[data-anno-id="anno-${annotationIdToEdit}"]`) as HTMLElement
-        if (!annotationElement || !this.scrollContainer) {
-          console.warn('无法找到标注元素或滚动容器')
-          return
-        }
-
-        const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-        if (!contentWrapper) {
-          console.warn('无法找到内容包装器')
-          return
-        }
-
-        // 创建一个 Range 用于定位编辑层
-        let rangeCreated = false
-        const range = document.createRange()
-        try {
-          // 尝试选择标注元素的文本节点
-          // 标注元素的结构可能是：<span class="line-highlight">文本</span>
-          // 或者：<span class="line-highlight"><span class="line-highlight-border"></span>文本</span>
-          const walker = document.createTreeWalker(annotationElement, NodeFilter.SHOW_TEXT, null)
-          const firstTextNode = walker.nextNode()
-
-          if (firstTextNode) {
-            range.setStart(firstTextNode, 0)
-            range.setEnd(firstTextNode, firstTextNode.textContent?.length || 0)
-            rangeCreated = true
-          } else {
-            // 如果没有文本节点，选择整个元素
-            range.selectNodeContents(annotationElement)
-            rangeCreated = true
-          }
-        } catch (e) {
-          console.warn('创建 Range 失败:', e)
-          rangeCreated = false
-        }
-
-        if (rangeCreated) {
-          this.savedRange = range
-          this.updateEditLayerPosition()
-        } else {
-          // 如果创建 Range 失败，使用标注元素的边界框直接计算位置
-          const rect = annotationElement.getBoundingClientRect()
-          const contentWrapperRect = contentWrapper.getBoundingClientRect()
-          const scrollContainerRect = this.scrollContainer.getBoundingClientRect()
-
-          let editLayerX = rect.left - contentWrapperRect.left
-          let editLayerY = rect.bottom - contentWrapperRect.top + 5
-
-          // 边界检查和调整（与 calculateEditLayerPosition 逻辑一致）
-          const editLayerHeight = 50
-          const editLayerWidth = 420
-
-          // 检查右边界
-          const maxX = contentWrapperRect.width - editLayerWidth
-          if (editLayerX > maxX) {
-            editLayerX = maxX
-          }
-          // 检查左边界
-          if (editLayerX < 0) {
-            editLayerX = 0
-          }
-
-          // 检查下边界
-          const scrollViewportBottom = scrollContainerRect.bottom - contentWrapperRect.top
-          if (editLayerY + editLayerHeight > scrollViewportBottom) {
-            const editLayerYAbove = rect.top - contentWrapperRect.top - editLayerHeight - 5
-            if (editLayerYAbove >= scrollContainerRect.top - contentWrapperRect.top) {
-              editLayerY = editLayerYAbove
-            } else {
-              editLayerY = Math.max(0, scrollViewportBottom - editLayerHeight)
-            }
-          }
-          // 检查上边界
-          const scrollViewportTop = scrollContainerRect.top - contentWrapperRect.top
-          if (editLayerY < scrollViewportTop) {
-            editLayerY = scrollViewportTop + 5
-          }
-
-          this.editLayerPosition = { x: editLayerX, y: editLayerY }
-        }
-
-        // 聚焦到选择框
-        const select = this.shadowRoot?.querySelector('.edit-layer select') as HTMLSelectElement
-        if (select) {
-          select.focus()
-        }
-      })
-    })
+    // 直接使用右键菜单的位置初始化编辑层位置，不查找元素
+    // 这样可以完全避免任何可能触发滚动的操作
+    if (this.scrollContainer) {
+      const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
+      if (contentWrapper) {
+        this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper)
+      } else {
+        this.editLayerPosition = menuPosition
+      }
+    } else {
+      this.editLayerPosition = menuPosition
+    }
   }
 
   /**
@@ -1231,6 +1192,196 @@ export class YsTextAnnotation extends LitElement {
     })
   }
 
+  /**
+   * 将标注按100份分组
+   * 为了性能考虑，只在 lines 或 annotations 变化时调用，不在 render 中计算
+   */
+  private updateGroupedAnnotations() {
+    if (this.lines.length === 0) {
+      this.groupedAnnotations = []
+      return
+    }
+
+    if (this.annotations.length === 0) {
+      this.groupedAnnotations = []
+      return
+    }
+
+    const SEGMENT_COUNT = 100
+    const segments: Map<number, AnnotationItem[]> = new Map()
+
+    // 将每个标注分配到对应的段
+    for (const annotation of this.annotations) {
+      // 计算标注属于哪个段（0-99）
+      // 使用 Math.min 确保最后一行也能正确映射到最后一个段
+      const segmentIndex = Math.min(Math.floor((annotation.lineId / this.lines.length) * SEGMENT_COUNT), SEGMENT_COUNT - 1)
+
+      if (!segments.has(segmentIndex)) {
+        segments.set(segmentIndex, [])
+      }
+      segments.get(segmentIndex)!.push(annotation)
+    }
+
+    // 转换为数组并计算位置百分比
+    this.groupedAnnotations = Array.from(segments.entries()).map(([segmentIndex, annotations]) => {
+      // 计算该段的中心位置百分比
+      const positionPercent = ((segmentIndex + 0.5) / SEGMENT_COUNT) * 100
+      return {
+        segmentIndex,
+        annotations,
+        positionPercent
+      }
+    })
+  }
+
+  /**
+   * 获取标注的颜色（用于合并显示时选择主要颜色）
+   * @param annotations 标注数组
+   * @returns 颜色值
+   */
+  private getGroupColor(annotations: AnnotationItem[]): string {
+    // 优先使用第一个标注的颜色
+    if (annotations.length > 0) {
+      const firstAnnotation = annotations[0]
+      if (firstAnnotation.color) {
+        return firstAnnotation.color
+      }
+      const annotationType = this.annotationType.find(type => type.type === firstAnnotation.type)
+      return annotationType?.color || '#3271ae'
+    }
+    return '#3271ae'
+  }
+
+  /**
+   * 获取单个标注的颜色
+   * @param annotation 标注项
+   * @returns 颜色值
+   */
+  private getAnnotationColor(annotation: AnnotationItem): string {
+    if (annotation.color) {
+      return annotation.color
+    }
+    // 如果没有指定颜色，从标注类型中查找
+    const annotationType = this.annotationType.find(type => type.type === annotation.type)
+    return annotationType?.color || '#3271ae'
+  }
+
+  /**
+   * 获取合并标注的提示文本
+   * @param annotations 标注数组
+   * @returns 提示文本
+   */
+  private getGroupTooltip(annotations: AnnotationItem[]): string {
+    if (annotations.length === 1) {
+      const ann = annotations[0]
+      return `行号: ${ann.lineId + 1}, 类型: ${ann.type}`
+    }
+    const lineNumbers = annotations.map(ann => ann.lineId + 1).sort((a, b) => a - b)
+    const types = [...new Set(annotations.map(ann => ann.type))].join(', ')
+    return `共 ${annotations.length} 个标注\n行号: ${lineNumbers.join(', ')}\n类型: ${types}`
+  }
+
+  /**
+   * 处理标注标记点击，显示标注列表
+   * @param e 点击事件
+   * @param annotations 标注组
+   * @param positionPercent 位置百分比
+   */
+  private handleMarkerClick(e: MouseEvent, annotations: AnnotationItem[], positionPercent: number) {
+    e.stopPropagation()
+    if (annotations.length === 0) return
+
+    // 获取标记元素的位置
+    const markerElement = e.currentTarget as HTMLElement
+    const asideContainer = markerElement.closest('.aside-container') as HTMLElement
+    if (!asideContainer) return
+
+    // 获取标记和容器的实际屏幕位置
+    const markerRect = markerElement.getBoundingClientRect()
+    const containerRect = asideContainer.getBoundingClientRect()
+
+    // 计算弹窗位置：相对于 aside-container
+    const popupWidth = 300 // 弹窗宽度
+    const popupMaxHeight = 400 // 弹窗最大高度
+    const gap = 8 // 标记和弹窗之间的间距
+
+    // 计算标记中心相对于 aside-container 的位置
+    const markerCenterY = markerRect.top - containerRect.top + markerRect.height / 2
+
+    // 初始位置：显示在标记右侧
+    let popupX = containerRect.width + gap
+    let popupY = markerCenterY
+
+    // 确保弹窗在可视区域内
+    const viewportHeight = window.innerHeight
+    const viewportWidth = window.innerWidth
+
+    // 计算弹窗在屏幕上的实际位置
+    const popupScreenTop = containerRect.top + popupY - popupMaxHeight / 2
+    const popupScreenBottom = containerRect.top + popupY + popupMaxHeight / 2
+    const popupScreenRight = containerRect.left + popupX + popupWidth
+
+    // 如果弹窗超出视口上方，调整位置
+    if (popupScreenTop < 0) {
+      popupY = popupMaxHeight / 2
+    }
+
+    // 如果弹窗超出视口下方，调整位置
+    if (popupScreenBottom > viewportHeight) {
+      popupY = containerRect.height - popupMaxHeight / 2
+      // 确保不会小于最小值
+      if (popupY < popupMaxHeight / 2) {
+        popupY = popupMaxHeight / 2
+      }
+    }
+
+    // 如果弹窗超出视口右侧，显示在标记左侧
+    if (popupScreenRight > viewportWidth) {
+      popupX = -popupWidth - gap // 显示在标记左侧
+    }
+
+    // 如果点击的是同一个分组，则关闭列表
+    if (this.selectedGroup && this.selectedGroup.annotations === annotations) {
+      this.selectedGroup = null
+    } else {
+      // 显示标注列表
+      this.selectedGroup = {
+        annotations,
+        positionPercent,
+        markerPosition: {
+          x: popupX,
+          y: popupY
+        }
+      }
+    }
+  }
+
+  /**
+   * 关闭标注列表
+   */
+  private closeAnnotationList() {
+    this.selectedGroup = null
+  }
+
+  /**
+   * 跳转到指定标注的位置
+   * @param annotation 标注项
+   */
+  private jumpToAnnotation(annotation: AnnotationItem) {
+    if (!this.scrollContainer) return
+
+    const targetLineId = annotation.lineId
+    const targetOffsetTop = this.getOffsetTop(targetLineId)
+
+    this.scrollContainer.scrollTo({
+      top: Math.max(0, targetOffsetTop),
+      behavior: 'smooth'
+    })
+
+    // 跳转后关闭列表
+    this.closeAnnotationList()
+  }
+
   render() {
     const visibleLines = this.lines.slice(this.visibleStartIndex, this.visibleEndIndex + 1)
     const totalHeight = this.getTotalHeight()
@@ -1240,16 +1391,39 @@ export class YsTextAnnotation extends LitElement {
     const visibleHeight = this.visibleLayerHeight > 0 ? this.visibleLayerHeight : visibleLines.length * this.lineHeight
 
     return html`
-      <div class="scroll-container" @scroll=${this.handleScroll}>
-        <div class="content-wrapper" style="height: ${totalHeight}px;">
-          <!-- SVG 关系层：与 virtual-list-layer 完全重叠 -->
-          <svg
-            class="relationship-layer ${this.isRelationshipLayerActive ? 'highlighted' : ''} ${this.isSelectingText ? 'selecting-text' : ''}"
-            style="transform: translateY(${offsetTop}px); height: ${visibleHeight}px;"
-            overflow="visible"
-          >
-            ${this.relationshipPaths.map(path => {
-              if (path.label && path.labelX !== undefined && path.labelY !== undefined && path.labelAngle !== undefined) {
+      <div class="main">
+        <div class="scroll-container" @scroll=${this.handleScroll}>
+          <div class="content-wrapper" style="height: ${totalHeight}px;">
+            <!-- SVG 关系层：与 virtual-list-layer 完全重叠 -->
+            <svg
+              class="relationship-layer ${this.isRelationshipLayerActive ? 'highlighted' : ''} ${this.isSelectingText ? 'selecting-text' : ''}"
+              style="transform: translateY(${offsetTop}px); height: ${visibleHeight}px;"
+              overflow="visible"
+            >
+              ${this.relationshipPaths.map(path => {
+                if (path.label && path.labelX !== undefined && path.labelY !== undefined && path.labelAngle !== undefined) {
+                  return svg`
+                    <path
+                      class="relationship-path"
+                      d=${path.d}
+                      data-rel-id=${path.id}
+                      stroke=${path.color}
+                      @mouseenter=${this.handleHighlightMouseEnter}
+                      @mouseleave=${this.handleHighlightMouseLeave}
+                      @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
+                    ></path>
+                    <text
+                      class="relationship-label"
+                      x=${path.labelX}
+                      y=${path.labelY}
+                      fill=${path.color}
+                      transform=${`rotate(${path.labelAngle} ${path.labelX} ${path.labelY})`}
+                      @mouseenter=${this.handleHighlightMouseEnter}
+                      @mouseleave=${this.handleHighlightMouseLeave}
+                      @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
+                    >${path.label}</text>
+                  `
+                }
                 return svg`
                   <path
                     class="relationship-path"
@@ -1260,112 +1434,146 @@ export class YsTextAnnotation extends LitElement {
                     @mouseleave=${this.handleHighlightMouseLeave}
                     @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
                   ></path>
-                  <text
-                    class="relationship-label"
-                    x=${path.labelX}
-                    y=${path.labelY}
-                    fill=${path.color}
-                    transform=${`rotate(${path.labelAngle} ${path.labelX} ${path.labelY})`}
-                    @mouseenter=${this.handleHighlightMouseEnter}
-                    @mouseleave=${this.handleHighlightMouseLeave}
-                    @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
-                  >${path.label}</text>
                 `
-              }
-              return svg`
-                <path
-                  class="relationship-path"
-                  d=${path.d}
-                  data-rel-id=${path.id}
-                  stroke=${path.color}
-                  @mouseenter=${this.handleHighlightMouseEnter}
-                  @mouseleave=${this.handleHighlightMouseLeave}
-                  @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
-                ></path>
-              `
-            })}
-            ${this.tempRelationshipPath
-              ? svg`<path
-                class="relationship-path temp-relationship-path"
-                d=${this.tempRelationshipPath.d}
-                stroke="#c12c1f"
-                stroke-dasharray="5,5"
-                opacity="0.6"
-              ></path>`
-              : null}
-          </svg>
+              })}
+              ${this.tempRelationshipPath
+                ? svg`<path
+                  class="relationship-path temp-relationship-path"
+                  d=${this.tempRelationshipPath.d}
+                  stroke="#c12c1f"
+                  stroke-dasharray="5,5"
+                  opacity="0.6"
+                ></path>`
+                : null}
+            </svg>
 
-          <!-- 虚拟列表层 （标注节点层） -->
-          <div
-            class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}"
-            style="transform: translateY(${offsetTop}px); padding-bottom: ${bottomPadding}px;"
-          >
-            <!-- ${visibleLines.map(line => html`<div class="line">${this.renderLineContent(line)}</div>`)} -->
-            ${visibleLines.map(
-              line => html`
-                <div class="line">
-                  ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
-                  <span class="line-content">${this.renderLineContent(line)}</span>
+            <!-- 虚拟列表层 （标注节点层） -->
+            <div
+              class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}"
+              style="transform: translateY(${offsetTop}px); padding-bottom: ${bottomPadding}px;"
+            >
+              <!-- ${visibleLines.map(line => html`<div class="line">${this.renderLineContent(line)}</div>`)} -->
+              ${visibleLines.map(
+                line => html`
+                  <div class="line">
+                    ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
+                    <span class="line-content">${this.renderLineContent(line)}</span>
+                  </div>
+                `
+              )}
+            </div>
+
+            <!-- 编辑层 -->
+            ${this.editLayerVisible
+              ? html`<div class="edit-layer" style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;">
+                  ${this.isEditingRelationship
+                    ? html`
+                        <select
+                          required
+                          .value=${this.selectedRelationshipType}
+                          @change=${this.handleTypeSelectChange}
+                          @keydown=${this.handleInputKeyDown}
+                        >
+                          <option value="" disabled>选择关系类型</option>
+                          ${this.relationshipType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+                        </select>
+                        <input
+                          type="text"
+                          .value=${this.editInputValue}
+                          @input=${this.handleInputChange}
+                          @keydown=${this.handleInputKeyDown}
+                          placeholder="输入描述（可选）"
+                        />
+                        <button @click=${this.handleConfirmEdit}>确认</button>
+                      `
+                    : html`
+                        <select required .value=${this.selectedAnnotationType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
+                          <option value="" disabled>选择类型</option>
+                          ${this.annotationType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+                        </select>
+                        <input
+                          type="text"
+                          .value=${this.editInputValue}
+                          @input=${this.handleInputChange}
+                          @keydown=${this.handleInputKeyDown}
+                          placeholder="输入描述（可选）"
+                        />
+                        <button @click=${this.handleConfirmEdit}>确认</button>
+                      `}
+                </div>`
+              : null}
+          </div>
+        </div>
+
+        <!-- 右侧aside -->
+        <div class="aside-container">
+          ${this.groupedAnnotations.map(
+            group => html`
+              <div
+                class="annotation-marker ${group.annotations.length > 1 ? 'merged' : ''} ${this.selectedGroup?.annotations === group.annotations
+                  ? 'selected'
+                  : ''}"
+                style="top: ${group.positionPercent}%; background-color: ${this.getGroupColor(group.annotations)};"
+                title="${this.getGroupTooltip(group.annotations)}"
+                @click=${(e: MouseEvent) => this.handleMarkerClick(e, group.annotations, group.positionPercent)}
+              >
+                <span class="annotation-marker-count">${group.annotations.length}</span>
+              </div>
+            `
+          )}
+          ${this.selectedGroup
+            ? html`
+                <div class="annotation-list-popup" style="left: ${this.selectedGroup.markerPosition.x}px; top: ${this.selectedGroup.markerPosition.y}px;">
+                  <div class="annotation-list-header">
+                    <span class="annotation-list-title">标注列表 (${this.selectedGroup.annotations.length})</span>
+                    <button class="annotation-list-close" @click=${() => this.closeAnnotationList()} title="关闭">×</button>
+                  </div>
+                  <div class="annotation-list-content">
+                    ${this.selectedGroup.annotations
+                      .sort((a, b) => a.lineId - b.lineId)
+                      .map(
+                        annotation => html`
+                          <div
+                            class="annotation-list-item"
+                            @click=${() => this.jumpToAnnotation(annotation)}
+                            title="点击跳转到行号 ${annotation.lineId + 1}"
+                          >
+                            <div class="annotation-list-item-line">
+                              <span class="annotation-list-line-number">${annotation.lineId + 1}</span>
+                              <span class="annotation-list-type" style="background-color: ${this.getAnnotationColor(annotation)};"
+                                >${annotation.type}</span
+                              >
+                            </div>
+                            <div class="annotation-list-item-content">${annotation.content}</div>
+                            ${annotation.description ? html`<div class="annotation-list-item-desc">${annotation.description}</div>` : null}
+                          </div>
+                        `
+                      )}
+                  </div>
                 </div>
               `
-            )}
-          </div>
-
-          <!-- 编辑层 -->
-          ${this.editLayerVisible
-            ? html`<div class="edit-layer" style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;">
-                ${this.isEditingRelationship
-                  ? html`
-                      <select required .value=${this.selectedRelationshipType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
-                        <option value="" disabled>选择关系类型</option>
-                        ${this.relationshipType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
-                      </select>
-                      <input
-                        type="text"
-                        .value=${this.editInputValue}
-                        @input=${this.handleInputChange}
-                        @keydown=${this.handleInputKeyDown}
-                        placeholder="输入描述（可选）"
-                      />
-                      <button @click=${this.handleConfirmEdit}>确认</button>
-                    `
-                  : html`
-                      <select required .value=${this.selectedAnnotationType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
-                        <option value="" disabled>选择类型</option>
-                        ${this.annotationType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
-                      </select>
-                      <input
-                        type="text"
-                        .value=${this.editInputValue}
-                        @input=${this.handleInputChange}
-                        @keydown=${this.handleInputKeyDown}
-                        placeholder="输入描述（可选）"
-                      />
-                      <button @click=${this.handleConfirmEdit}>确认</button>
-                    `}
-              </div>`
-            : null}
-
-          <!-- 右键菜单层 -->
-          ${this.contextMenuVisible
-            ? html`<div
-                class="context-menu"
-                style="left: ${this.contextMenuPosition.x}px; top: ${this.contextMenuPosition.y}px;"
-                @click=${(e: MouseEvent) => e.stopPropagation()}
-              >
-                ${this.contextMenuTarget?.type === 'annotation'
-                  ? html`
-                      <button class="context-menu-item create-relationship" @click=${this.handleCreateRelationship}>创建关系</button>
-                      <button class="context-menu-item edit-annotation" @click=${this.handleEditAnnotation}>编辑标注</button>
-                    `
-                  : null}
-                ${this.contextMenuTarget?.type === 'relationship'
-                  ? html`<button class="context-menu-item edit-relationship" @click=${this.handleEditRelationship}>编辑关系</button> `
-                  : null}
-                <button class="context-menu-item delete" @click=${this.handleDelete}>删除</button>
-              </div>`
             : null}
         </div>
+
+        <!-- 右键菜单层 -->
+        ${this.contextMenuVisible
+          ? html`<div
+              class="context-menu"
+              style="left: ${this.contextMenuPosition.x}px; top: ${this.contextMenuPosition.y}px;"
+              @click=${(e: MouseEvent) => e.stopPropagation()}
+            >
+              ${this.contextMenuTarget?.type === 'annotation'
+                ? html`
+                    <button class="context-menu-item create-relationship" @click=${this.handleCreateRelationship}>创建关系</button>
+                    <button class="context-menu-item edit-annotation" @click=${this.handleEditAnnotation}>编辑标注</button>
+                  `
+                : null}
+              ${this.contextMenuTarget?.type === 'relationship'
+                ? html`<button class="context-menu-item edit-relationship" @click=${this.handleEditRelationship}>编辑关系</button>`
+                : null}
+              <button class="context-menu-item delete" @click=${this.handleDelete}>删除</button>
+            </div>`
+          : null}
       </div>
     `
   }

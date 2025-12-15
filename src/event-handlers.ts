@@ -10,10 +10,7 @@ export interface HandleTextSelectionParams {
   visibleStartIndex: number
   lines: Array<{ id: number; content: string }>
   annotations: AnnotationItem[]
-  onSelectionProcessed: (info: SelectedTextInfo) => void
-  onEditLayerPositionUpdate: () => void
-  onEditLayerShow: () => void
-  onFocusSelect: () => void
+  onEditLayerShow: (info: SelectedTextInfo) => void
 }
 
 /**
@@ -49,10 +46,7 @@ export function handleTextSelection(params: HandleTextSelectionParams): void {
     visibleStartIndex,
     lines,
     annotations,
-    onSelectionProcessed,
-    onEditLayerPositionUpdate,
-    onEditLayerShow,
-    onFocusSelect
+    onEditLayerShow
   } = params
 
   // 如果 savedRange 不存在，直接返回
@@ -154,10 +148,7 @@ export function handleTextSelection(params: HandleTextSelectionParams): void {
     return
   }
 
-  onSelectionProcessed(selectedTextInfo)
-  onEditLayerPositionUpdate()
-  onEditLayerShow()
-  onFocusSelect()
+  onEditLayerShow(selectedTextInfo)
 }
 
 // 确认编辑的参数

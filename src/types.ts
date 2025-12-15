@@ -104,14 +104,19 @@ export const mockAnnotation: AnnotationItem[] = [
   { id: '2', lineId: 7, start: 5, end: 11, content: '第1497章', type: '章节', description: '', color: '#547689' },
   { id: '3', lineId: 8, start: 12, end: 30, content: '原本拥有圣龙之命，却被敌国武王以亿万', type: '章节', description: '', color: '#547689' },
   { id: '4', lineId: 25, start: 1, end: 3, content: '此时', type: '时间', description: '', color: '#547689' },
-  { id: '5', lineId: 21, start: 2, end: 5, content: '青檀石', type: '物品', description: '', color: '#5c2d91' }
+  { id: '5', lineId: 21, start: 2, end: 5, content: '青檀石', type: '物品', description: '', color: '#5c2d91' },
+  { id: '6', lineId: 10300, start: 0, end: 4, content: '毫光之中', type: '物品', description: '', color: '#5c2d91' },
+  { id: '7', lineId: 30213, start: 1, end: 5, content: '你的底气', type: '物品', description: '', color: '#5c2d91' },
+  { id: '8', lineId: 40100, start: 0, end: 2, content: '此时', type: '时间', description: '', color: '#547689' },
+  { id: '9', lineId: 40700, start: 2, end: 4, content: '众人', type: '章节', description: '', color: '#547689' }
 ]
 
 // 关系模拟数据
 export const mockRelationship: RelationshipItem[] = [
   { id: '1-2', startId: '1', endId: '2', type: '', description: '', color: '#df970b' },
   { id: '1-3', startId: '1', endId: '3', type: '关系2', description: '', color: '#53df0b' },
-  { id: '3-5', startId: '3', endId: '5', type: '关系3', description: '', color: '#722ed1' }
+  { id: '3-5', startId: '3', endId: '5', type: '关系3', description: '', color: '#722ed1' },
+  { id: '3-7', startId: '3', endId: '7', type: '关系3', description: '', color: '#722ed1' }
 ]
 
 // 默认标注类型

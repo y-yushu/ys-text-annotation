@@ -230,41 +230,69 @@ export interface ContextMenuPosition {
 
 export function calculateContextMenuPosition(
   e: MouseEvent,
-  contentWrapper: HTMLElement,
+  mainContainer: HTMLElement,
   scrollContainer?: HTMLElement,
   menuWidth: number = 120,
   menuHeight: number = 40
 ): ContextMenuPosition {
-  const contentWrapperRect = contentWrapper.getBoundingClientRect()
-  const scrollContainerRect = scrollContainer?.getBoundingClientRect() || contentWrapperRect
+  const mainRect = mainContainer.getBoundingClientRect()
+  const scrollContainerRect = scrollContainer?.getBoundingClientRect()
   
-  // 计算菜单相对于 contentWrapper 的位置
-  // 使用鼠标事件的 clientX/clientY 和 contentWrapper 的 getBoundingClientRect
-  let menuX = e.clientX - contentWrapperRect.left
-  let menuY = e.clientY - contentWrapperRect.top
+  // 计算菜单相对于 main 容器的位置
+  // 使用鼠标事件的 clientX/clientY 和 main 容器的 getBoundingClientRect
+  let menuX = e.clientX - mainRect.left
+  let menuY = e.clientY - mainRect.top
 
   // 调整菜单位置，确保不超出滚动容器的可视区域
-  // 计算滚动容器的可视区域相对于 contentWrapper 的位置
-  const scrollViewportTop = scrollContainerRect.top - contentWrapperRect.top
-  const scrollViewportBottom = scrollViewportTop + scrollContainerRect.height
-  const scrollViewportLeft = scrollContainerRect.left - contentWrapperRect.left
-  const scrollViewportRight = scrollViewportLeft + scrollContainerRect.width
+  // 注意：菜单应该显示在鼠标位置附近，优先显示在鼠标右下方
+  if (scrollContainerRect) {
+    // 计算滚动容器的可视区域相对于 main 容器的位置
+    const scrollViewportTop = scrollContainerRect.top - mainRect.top
+    const scrollViewportBottom = scrollViewportTop + scrollContainerRect.height
+    const scrollViewportLeft = scrollContainerRect.left - mainRect.left
+    const scrollViewportRight = scrollViewportLeft + scrollContainerRect.width
 
-  // 检查右边界（相对于滚动容器可视区域）
-  if (menuX + menuWidth > scrollViewportRight) {
-    menuX = scrollViewportRight - menuWidth
-  }
-  // 检查左边界
-  if (menuX < scrollViewportLeft) {
-    menuX = scrollViewportLeft
-  }
-  // 检查下边界（相对于滚动容器可视区域）
-  if (menuY + menuHeight > scrollViewportBottom) {
-    menuY = scrollViewportBottom - menuHeight
-  }
-  // 检查上边界
-  if (menuY < scrollViewportTop) {
-    menuY = scrollViewportTop
+    // 检查右边界（相对于滚动容器可视区域）
+    // 如果菜单超出右边界，显示在鼠标左侧
+    if (menuX + menuWidth > scrollViewportRight) {
+      menuX = Math.max(scrollViewportLeft, menuX - menuWidth)
+    }
+    // 检查左边界
+    if (menuX < scrollViewportLeft) {
+      menuX = scrollViewportLeft
+    }
+    // 检查下边界（相对于滚动容器可视区域）
+    // 如果菜单超出下边界，显示在鼠标上方
+    if (menuY + menuHeight > scrollViewportBottom) {
+      menuY = Math.max(scrollViewportTop, menuY - menuHeight)
+    }
+    // 检查上边界
+    if (menuY < scrollViewportTop) {
+      menuY = scrollViewportTop
+    }
+  } else {
+    // 如果没有滚动容器，相对于 main 容器边界调整
+    const mainWidth = mainRect.width
+    const mainHeight = mainRect.height
+
+    // 检查右边界
+    // 如果菜单超出右边界，显示在鼠标左侧
+    if (menuX + menuWidth > mainWidth) {
+      menuX = Math.max(0, menuX - menuWidth)
+    }
+    // 检查左边界
+    if (menuX < 0) {
+      menuX = 0
+    }
+    // 检查下边界
+    // 如果菜单超出下边界，显示在鼠标上方
+    if (menuY + menuHeight > mainHeight) {
+      menuY = Math.max(0, menuY - menuHeight)
+    }
+    // 检查上边界
+    if (menuY < 0) {
+      menuY = 0
+    }
   }
 
   return { x: menuX, y: menuY }
