@@ -598,6 +598,95 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
+   * 根据标注信息创建 Range 对象（用于编辑标注时定位）
+   */
+  private createRangeFromAnnotation(annotation: AnnotationItem): Range | null {
+    if (!this.shadowRoot) return null
+
+    const virtualListLayer = this.shadowRoot.querySelector('.virtual-list-layer') as HTMLElement
+    if (!virtualListLayer) return null
+
+    // 检查标注所在的行是否在可视区域内
+    if (annotation.lineId < this.visibleStartIndex || annotation.lineId > this.visibleEndIndex) {
+      // 如果不在可视区域内，返回 null，将使用右键菜单位置作为回退
+      return null
+    }
+
+    // 找到对应的行元素
+    const lineIndexInView = annotation.lineId - this.visibleStartIndex
+    const lineElements = virtualListLayer.querySelectorAll('.line')
+    const lineElement = lineElements[lineIndexInView] as HTMLElement
+    if (!lineElement) return null
+
+    // 找到 line-content 元素
+    const lineContentElement = lineElement.querySelector('.line-content') as HTMLElement
+    if (!lineContentElement) return null
+
+    // 创建 Range 对象
+    const range = document.createRange()
+
+    // 找到标注对应的文本节点和偏移量
+    // 由于 line-content 中可能包含标注元素，需要遍历文本节点来计算正确的偏移量
+    const walker = document.createTreeWalker(lineContentElement, NodeFilter.SHOW_TEXT, {
+      acceptNode: node => {
+        // 跳过标注描述文本
+        const parent = node.parentElement
+        if (parent?.classList.contains('line-highlight-desc')) {
+          return NodeFilter.FILTER_REJECT
+        }
+        return NodeFilter.FILTER_ACCEPT
+      }
+    })
+
+    let currentOffset = 0
+    let startNode: Node | null = null
+    let startOffset = 0
+    let endNode: Node | null = null
+    let endOffset = 0
+
+    let node: Node | null
+    while ((node = walker.nextNode())) {
+      const nodeLength = node.textContent?.length || 0
+      const nodeEndOffset = currentOffset + nodeLength
+
+      // 设置 Range 的起始位置
+      if (startNode === null && currentOffset <= annotation.start && annotation.start <= nodeEndOffset) {
+        startNode = node
+        startOffset = annotation.start - currentOffset
+      }
+
+      // 设置 Range 的结束位置
+      if (currentOffset <= annotation.end && annotation.end <= nodeEndOffset) {
+        endNode = node
+        endOffset = annotation.end - currentOffset
+        break
+      }
+
+      currentOffset = nodeEndOffset
+    }
+
+    // 如果找到了起始和结束节点，设置 Range
+    if (startNode && endNode) {
+      try {
+        // 确保偏移量在有效范围内
+        const startNodeLength = startNode.textContent?.length || 0
+        const endNodeLength = endNode.textContent?.length || 0
+        const safeStartOffset = Math.max(0, Math.min(startOffset, startNodeLength))
+        const safeEndOffset = Math.max(0, Math.min(endOffset, endNodeLength))
+
+        range.setStart(startNode, safeStartOffset)
+        range.setEnd(endNode, safeEndOffset)
+        return range
+      } catch (e) {
+        // 如果设置失败，返回 null
+        return null
+      }
+    }
+
+    return null
+  }
+
+  /**
    * 更新编辑层位置（用于滚动时重新定位）
    */
   private updateEditLayerPosition() {
@@ -865,10 +954,6 @@ export class YsTextAnnotation extends LitElement {
       content: annotation.content
     }
 
-    // 保存右键菜单位置，用于初始化编辑层位置
-    // 编辑标注时，直接使用右键菜单的位置，不查找元素，避免触发滚动
-    const menuPosition = { ...this.contextMenuPosition }
-
     // 清理右键菜单目标
     this.contextMenuTarget = null
 
@@ -876,17 +961,29 @@ export class YsTextAnnotation extends LitElement {
     // 通过 editingAnnotationId 区分是新增还是编辑
     this.functionMode = FunctionMode.CREATING_ANNOTATION
 
-    // 直接使用右键菜单的位置初始化编辑层位置，不查找元素
-    // 这样可以完全避免任何可能触发滚动的操作
+    // 尝试根据标注信息创建 Range 对象，使用和新建标注相同的位置计算逻辑
     if (this.scrollContainer) {
       const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
       if (contentWrapper) {
-        this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper)
+        // 尝试根据标注信息创建 Range
+        const range = this.createRangeFromAnnotation(annotation)
+        if (range) {
+          // 如果成功创建 Range，使用和新建标注相同的位置计算逻辑
+          this.editLayerPosition = calculateEditLayerPosition(range, this.scrollContainer, contentWrapper)
+          // 保存 Range，以便后续可能需要使用
+          this.savedRange = range
+        } else {
+          // 如果无法创建 Range（例如标注不在可视区域内），回退到使用右键菜单位置
+          const menuPosition = { ...this.contextMenuPosition }
+          this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper)
+        }
       } else {
-        this.editLayerPosition = menuPosition
+        // 如果没有 contentWrapper，使用右键菜单位置
+        this.editLayerPosition = { ...this.contextMenuPosition }
       }
     } else {
-      this.editLayerPosition = menuPosition
+      // 如果没有 scrollContainer，使用右键菜单位置
+      this.editLayerPosition = { ...this.contextMenuPosition }
     }
   }
 
