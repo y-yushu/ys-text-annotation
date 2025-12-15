@@ -7,7 +7,10 @@ import {
   calculateEditLayerPosition,
   calculateContextMenuPosition,
   calculateEditLayerPositionFromPoint,
-  measureLineHeight
+  measureLineHeight,
+  getTextOffsetInLine,
+  getAnnotationsByLineId,
+  calculateBezierCurvePath
 } from './utils'
 import type {
   LineItem,
@@ -30,10 +33,6 @@ import {
   type FunctionModeType,
   type LayerDisplayModeType
 } from './types'
-import { renderLineContent } from './render-helpers'
-import { measureRelationships } from './relationship-measurer'
-import { updateVisibleRange, getTotalHeight, getOffsetTop } from './virtual-list'
-import { handleTextSelection, handleConfirmEdit, handleDelete } from './event-handlers'
 
 @customElement('ys-text-annotation')
 export class YsTextAnnotation extends LitElement {
@@ -476,6 +475,59 @@ export class YsTextAnnotation extends LitElement {
     })
   }
 
+  /**
+   * 更新可见范围
+   */
+  private updateVisibleRangeInternal(params: { scrollContainer: HTMLElement; lines: Array<unknown>; lineHeight: number; containerHeight: number }): {
+    visibleStartIndex: number
+    visibleEndIndex: number
+    containerHeight: number
+  } | null {
+    const { scrollContainer, lines, lineHeight, containerHeight: currentContainerHeight } = params
+
+    if (!scrollContainer || lines.length === 0) {
+      return null
+    }
+
+    const { scrollTop, clientHeight } = scrollContainer
+    const containerHeight = clientHeight || currentContainerHeight
+    const buffer = VIRTUAL_LIST_CONFIG.BUFFER_SIZE
+
+    // 计算内容实际高度（不包含底部额外空间）
+    const contentHeight = lines.length * lineHeight
+
+    // 计算当前滚动位置距离底部内容的距离
+    // 当 scrollTop + containerHeight 接近 contentHeight 时，认为接近底部
+    const distanceToContentBottom = contentHeight - (scrollTop + containerHeight)
+    const isNearBottom = distanceToContentBottom <= VIRTUAL_LIST_CONFIG.BOTTOM_THRESHOLD
+
+    // 计算可见区域的行索引范围
+    let startIndex = Math.max(0, Math.floor(scrollTop / lineHeight) - buffer)
+    let endIndex = Math.ceil((scrollTop + containerHeight) / lineHeight) + buffer
+
+    // 接近底部时，确保包含最后一行，并且确保最后一行有足够的缓冲区
+    if (isNearBottom) {
+      // 确保 endIndex 包含最后一行
+      endIndex = lines.length - 1
+      // 确保 startIndex 不会太大，这样最后一行就能在可视区域内
+      // 计算要显示最后一行所需的最小 startIndex
+      const minStartForLastLine = Math.max(0, lines.length - 1 - Math.ceil(containerHeight / lineHeight) - buffer)
+      startIndex = Math.max(0, Math.min(startIndex, minStartForLastLine + buffer))
+    } else {
+      endIndex = Math.min(lines.length - 1, endIndex)
+    }
+
+    // 确保索引范围有效
+    startIndex = Math.min(startIndex, endIndex)
+    endIndex = Math.max(startIndex, endIndex)
+
+    return {
+      visibleStartIndex: startIndex,
+      visibleEndIndex: endIndex,
+      containerHeight
+    }
+  }
+
   private updateVisibleRange() {
     if (!this.scrollContainer) return
 
@@ -485,7 +537,7 @@ export class YsTextAnnotation extends LitElement {
       this.containerHeight = clientHeight
     }
 
-    const result = updateVisibleRange({
+    const result = this.updateVisibleRangeInternal({
       scrollContainer: this.scrollContainer,
       lines: this.lines,
       lineHeight: this.lineHeight,
@@ -499,7 +551,7 @@ export class YsTextAnnotation extends LitElement {
   }
 
   private getTotalHeight(): number {
-    return getTotalHeight(this.lines.length, this.lineHeight)
+    return this.lines.length * this.lineHeight
   }
 
   private getBottomPadding(): number {
@@ -507,7 +559,7 @@ export class YsTextAnnotation extends LitElement {
   }
 
   private getOffsetTop(index: number): number {
-    return getOffsetTop(index, this.lineHeight)
+    return index * this.lineHeight
   }
 
   /**
@@ -526,11 +578,45 @@ export class YsTextAnnotation extends LitElement {
       }
     }
 
-    const paths = measureRelationships({
-      relationships: this.relationships,
-      shadowRoot: this.shadowRoot,
-      virtualListLayer
-    })
+    if (!this.shadowRoot || !virtualListLayer) {
+      this.relationshipPaths = []
+      return
+    }
+
+    const paths: RelationshipPath[] = []
+
+    // 默认颜色
+    const defaultColor = '#c12c1f'
+
+    // 遍历所有关系
+    for (const relationship of this.relationships) {
+      const { id, startId, endId, type, color } = relationship
+      const pathColor = color || defaultColor
+      // 使用 type 作为标签显示文本
+      const labelText = type || ''
+
+      // 查找起点和终点的 line-highlight 元素
+      const startElement = this.shadowRoot.querySelector(`[data-anno-id="anno-${startId}"]`) as HTMLElement
+      const endElement = this.shadowRoot.querySelector(`[data-anno-id="anno-${endId}"]`) as HTMLElement
+
+      // 如果起点或终点元素不存在（未渲染），跳过
+      if (!startElement || !endElement) continue
+
+      const startPos = this.getElementCenterPosition(startElement, virtualListLayer)
+      const endPos = this.getElementCenterPosition(endElement, virtualListLayer)
+
+      // 生成贝塞尔曲线路径（从起点中心到终点中心）
+      const bezierResult = calculateBezierCurvePath(startPos, endPos, labelText)
+      paths.push({
+        id,
+        d: bezierResult.d,
+        label: labelText,
+        color: pathColor,
+        labelX: bezierResult.labelX,
+        labelY: bezierResult.labelY,
+        labelAngle: bezierResult.labelAngle
+      })
+    }
 
     this.relationshipPaths = paths
   }
@@ -559,6 +645,24 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
+   * 检查选中的文本范围是否与已标注的内容重叠
+   */
+  private hasOverlapWithAnnotations(lineId: number, start: number, end: number, annotations: AnnotationItem[]): boolean {
+    // 查找同一行的所有标注
+    const lineAnnotations = annotations.filter(ann => ann.lineId === lineId)
+
+    // 检查是否与任何标注重叠
+    // 两个范围 [a1, a2] 和 [b1, b2] 重叠的条件是：a1 <= b2 && a2 >= b1
+    for (const annotation of lineAnnotations) {
+      if (start <= annotation.end && end >= annotation.start) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  /**
    * 处理文本选择事件
    */
   private handleTextSelection() {
@@ -573,28 +677,118 @@ export class YsTextAnnotation extends LitElement {
       return
     }
 
-    handleTextSelection({
-      savedRange: this.savedRange,
-      shadowRoot: this.shadowRoot,
-      visibleStartIndex: this.visibleStartIndex,
-      lines: this.lines,
-      annotations: this.annotations,
-      onEditLayerShow: (info: SelectedTextInfo) => {
-        // 再次检查 editingEnabled，防止在异步回调中状态已改变
-        if (!this.editingEnabled) {
-          return
-        }
-        // 保存选中的文本信息
-        this.selectedTextInfo = info
-        // 更新编辑层位置
-        this.updateEditLayerPosition()
-        // 重置编辑层状态
-        this.editInputValue = ''
-        this.selectedAnnotationType = ''
-        // 切换到创建标注模式
-        this.functionMode = FunctionMode.CREATING_ANNOTATION
-      }
-    })
+    // 如果 savedRange 不存在，直接返回
+    if (!this.savedRange) {
+      return
+    }
+
+    const range = this.savedRange
+
+    // 检查选择是否折叠（没有选中文本）
+    if (range.collapsed) {
+      return
+    }
+
+    const rawSelectedText = range.toString()
+    const selectedText = rawSelectedText.trim()
+
+    // 如果没有选中文本，隐藏编辑图层
+    if (!selectedText) {
+      return
+    }
+
+    // 检查选中的文本是否在虚拟列表中
+    const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
+    if (!virtualListLayer) return
+
+    const virtualListLayerRect = virtualListLayer.getBoundingClientRect()
+    const rangeRect = range.getBoundingClientRect()
+
+    // 检查选中文本是否在虚拟列表层内
+    if (
+      rangeRect.left < virtualListLayerRect.left ||
+      rangeRect.right > virtualListLayerRect.right ||
+      rangeRect.top < virtualListLayerRect.top ||
+      rangeRect.bottom > virtualListLayerRect.bottom
+    ) {
+      return
+    }
+
+    // 找到包含选中文本的 line 元素
+    // commonAncestorContainer 可能是文本节点，需要找到元素节点
+    let node: Node | null = range.commonAncestorContainer
+    // 如果是文本节点，获取其父元素
+    if (node.nodeType === Node.TEXT_NODE) {
+      node = node.parentElement
+    }
+    let lineElement: HTMLElement | null = node as HTMLElement
+    while (lineElement && (!lineElement.classList || !lineElement.classList.contains('line'))) {
+      lineElement = lineElement.parentElement
+    }
+    if (!lineElement) return
+
+    // 找到 line-content 元素（实际包含文本内容的元素）
+    const lineContentElement = lineElement.querySelector('.line-content') as HTMLElement
+    if (!lineContentElement) return
+
+    // 找到 line 在虚拟列表中的索引
+    const lineParent = lineElement.parentElement
+    if (!lineParent) return
+
+    const lineIndexInView = Array.from(lineParent.children).indexOf(lineElement)
+    const actualLineIndex = this.visibleStartIndex + lineIndexInView
+
+    // 获取 line 的原始文本内容
+    const lineContent = this.lines[actualLineIndex]?.content || ''
+    if (!lineContent) return
+
+    // 计算选中文本在 line-content 文本中的位置
+    // 由于 line-content 中可能包含标注元素，我们需要找到选中文本在原始 lineContent 中的位置
+    let startOffset = getTextOffsetInLine(lineContentElement, range.startContainer, range.startOffset)
+    let endOffset = getTextOffsetInLine(lineContentElement, range.endContainer, range.endOffset)
+
+    // 如果选中的文本经过 trim，需要调整 start 和 end 来匹配 trim 后的内容
+    // 找到 trim 后的文本在原始文本中的实际位置
+    if (rawSelectedText !== selectedText) {
+      // 获取原始范围对应的文本
+      const rawRangeText = lineContent.substring(startOffset, endOffset)
+      // 计算前导空格数
+      const leadingSpaces = rawRangeText.length - rawRangeText.trimStart().length
+      // 计算尾部空格数
+      const trailingSpaces = rawRangeText.length - rawRangeText.trimEnd().length
+
+      // 调整偏移量：去掉前导和尾部空格
+      startOffset = startOffset + leadingSpaces
+      endOffset = endOffset - trailingSpaces
+    }
+
+    // 保存选中的文本信息
+    const selectedTextInfo: SelectedTextInfo = {
+      lineId: actualLineIndex,
+      start: startOffset,
+      end: endOffset,
+      content: selectedText
+    }
+
+    // 检查选中的文本是否与已标注的内容重叠
+    if (this.hasOverlapWithAnnotations(actualLineIndex, startOffset, endOffset, this.annotations)) {
+      // 如果与已标注内容重叠，不显示编辑层
+      return
+    }
+
+    // 再次检查 editingEnabled，防止在异步回调中状态已改变
+    if (!this.editingEnabled) {
+      return
+    }
+    // 保存选中的文本信息
+    this.selectedTextInfo = selectedTextInfo
+    // 更新编辑层位置
+    this.updateEditLayerPosition()
+    // 重置编辑层状态
+    this.editInputValue = ''
+    this.selectedAnnotationType = ''
+    // 切换到创建标注模式
+    this.functionMode = FunctionMode.CREATING_ANNOTATION
   }
 
   /**
@@ -695,6 +889,9 @@ export class YsTextAnnotation extends LitElement {
     const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
     if (!contentWrapper) return
 
+    const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
+    if (!mainContainer) return
+
     // 编辑模式：不需要重新定位，编辑层位置在初始化时已设置
     // 编辑标注时，编辑层位置固定，不随滚动改变
     if (this.editingAnnotationId) {
@@ -703,7 +900,7 @@ export class YsTextAnnotation extends LitElement {
 
     // 创建模式：使用 Range 重新定位
     if (this.savedRange) {
-      this.editLayerPosition = calculateEditLayerPosition(this.savedRange, this.scrollContainer, contentWrapper)
+      this.editLayerPosition = calculateEditLayerPosition(this.savedRange, this.scrollContainer, contentWrapper, mainContainer)
     }
   }
 
@@ -734,28 +931,61 @@ export class YsTextAnnotation extends LitElement {
     }
 
     // 处理标注的创建/编辑
+    // 验证下拉选择框是否已选择（必填）
+    if (!this.selectedAnnotationType || !this.selectedTextInfo) {
+      return
+    }
+
+    // 查找选中的类型对应的颜色
+    const selectedTypeObj = this.annotationType.find(type => type.type === this.selectedAnnotationType)
+    const typeColor = selectedTypeObj?.color || '#2d0bdf'
+
+    const trimmedDescription = this.editInputValue.trim()
+
     // 判断是创建模式还是编辑模式（通过 editingAnnotationId 判断）
     const isEditing = !!this.editingAnnotationId
 
-    handleConfirmEdit({
-      selectedAnnotationType: this.selectedAnnotationType,
-      selectedTextInfo: this.selectedTextInfo,
-      editInputValue: this.editInputValue,
-      annotationTypes: this.annotationType,
-      shadowRoot: this.shadowRoot,
-      isEditing: !!isEditing,
-      editingAnnotationId: this.editingAnnotationId || undefined,
-      onAnnotationCreated: (annotation: AnnotationItem) => {
-        this.annotations = [...this.annotations, annotation]
-      },
-      onAnnotationUpdated: (updatedAnnotation: AnnotationItem) => {
-        this.annotations = this.annotations.map(ann => (ann.id === updatedAnnotation.id ? updatedAnnotation : ann))
-      },
-      onEditLayerHide: () => {
-        // 重置到默认模式
-        this.resetToDefaultMode()
+    if (isEditing && this.editingAnnotationId) {
+      // 编辑模式：更新已有标注
+      const updatedAnnotation: AnnotationItem = {
+        id: this.editingAnnotationId,
+        lineId: this.selectedTextInfo.lineId,
+        start: this.selectedTextInfo.start,
+        end: this.selectedTextInfo.end,
+        content: this.selectedTextInfo.content,
+        type: this.selectedAnnotationType,
+        description: trimmedDescription,
+        color: typeColor
       }
-    })
+      this.annotations = this.annotations.map(ann => (ann.id === updatedAnnotation.id ? updatedAnnotation : ann))
+    } else {
+      // 创建模式：创建新标注
+      const newId = `anno-${Date.now()}`
+      const newAnnotation: AnnotationItem = {
+        id: newId,
+        lineId: this.selectedTextInfo.lineId,
+        start: this.selectedTextInfo.start,
+        end: this.selectedTextInfo.end,
+        content: this.selectedTextInfo.content,
+        type: this.selectedAnnotationType,
+        description: trimmedDescription,
+        color: typeColor
+      }
+      this.annotations = [...this.annotations, newAnnotation]
+    }
+
+    // 清除文本选择（使用 Shadow DOM 的选择）
+    const selection = getShadowDOMSelection(this.shadowRoot)
+    if (selection) {
+      selection.removeAllRanges()
+    } else {
+      // 回退到全局选择清除（如果 Shadow DOM 选择不可用）
+      window.getSelection()?.removeAllRanges()
+    }
+
+    // 隐藏编辑图层
+    // 重置到默认模式
+    this.resetToDefaultMode()
   }
 
   /**
@@ -895,8 +1125,9 @@ export class YsTextAnnotation extends LitElement {
     // 使用工具函数计算编辑层位置，确保在可视范围内
     if (this.scrollContainer) {
       const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-      if (contentWrapper) {
-        this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper)
+      const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
+      if (contentWrapper && mainContainer) {
+        this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper, mainContainer)
       } else {
         this.editLayerPosition = menuPosition
       }
@@ -964,21 +1195,22 @@ export class YsTextAnnotation extends LitElement {
     // 尝试根据标注信息创建 Range 对象，使用和新建标注相同的位置计算逻辑
     if (this.scrollContainer) {
       const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-      if (contentWrapper) {
+      const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
+      if (contentWrapper && mainContainer) {
         // 尝试根据标注信息创建 Range
         const range = this.createRangeFromAnnotation(annotation)
         if (range) {
           // 如果成功创建 Range，使用和新建标注相同的位置计算逻辑
-          this.editLayerPosition = calculateEditLayerPosition(range, this.scrollContainer, contentWrapper)
+          this.editLayerPosition = calculateEditLayerPosition(range, this.scrollContainer, contentWrapper, mainContainer)
           // 保存 Range，以便后续可能需要使用
           this.savedRange = range
         } else {
           // 如果无法创建 Range（例如标注不在可视区域内），回退到使用右键菜单位置
           const menuPosition = { ...this.contextMenuPosition }
-          this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper)
+          this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper, mainContainer)
         }
       } else {
-        // 如果没有 contentWrapper，使用右键菜单位置
+        // 如果没有 contentWrapper 或 mainContainer，使用右键菜单位置
         this.editLayerPosition = { ...this.contextMenuPosition }
       }
     } else {
@@ -996,21 +1228,23 @@ export class YsTextAnnotation extends LitElement {
       return
     }
 
-    handleDelete({
-      contextMenuTarget: this.contextMenuTarget,
-      onAnnotationDeleted: (id: string) => {
-        this.annotations = this.annotations.filter(annotation => annotation.id !== id)
-        // 删除该标注关联的所有关系
-        this.relationships = this.relationships.filter(relationship => relationship.startId !== id && relationship.endId !== id)
-      },
-      onRelationshipDeleted: (id: string) => {
-        this.relationships = this.relationships.filter(relationship => relationship.id !== id)
-      },
-      onContextMenuHide: () => {
-        // 重置到默认模式
-        this.resetToDefaultMode()
-      }
-    })
+    if (!this.contextMenuTarget) return
+
+    if (this.contextMenuTarget.type === 'annotation') {
+      // 删除标注
+      const id = this.contextMenuTarget.id
+      this.annotations = this.annotations.filter(annotation => annotation.id !== id)
+      // 删除该标注关联的所有关系
+      this.relationships = this.relationships.filter(relationship => relationship.startId !== id && relationship.endId !== id)
+    } else if (this.contextMenuTarget.type === 'relationship') {
+      // 删除关系
+      const id = this.contextMenuTarget.id
+      this.relationships = this.relationships.filter(relationship => relationship.id !== id)
+    }
+
+    // 关闭右键菜单
+    // 重置到默认模式
+    this.resetToDefaultMode()
   }
 
   /**
@@ -1267,7 +1501,7 @@ export class YsTextAnnotation extends LitElement {
   /**
    * 渲染行内容，如果有标注则高亮显示
    */
-  private renderLineContent(line: LineItem) {
+  private renderLineContent(line: LineItem): string | ReturnType<typeof html> {
     // 只在创建标注模式（新增）时显示选中文本的高亮，编辑模式不显示（通过 editingAnnotationId 判断）
     const isEditingThisLine = !!(
       this.functionMode === FunctionMode.CREATING_ANNOTATION &&
@@ -1276,17 +1510,134 @@ export class YsTextAnnotation extends LitElement {
       this.selectedTextInfo.lineId === line.id
     )
 
-    return renderLineContent({
-      line,
-      annotations: this.annotations,
-      isEditingThisLine,
-      selectedTextInfo: this.selectedTextInfo,
-      onHighlightMouseEnter: () => this.handleHighlightMouseEnter(),
-      onHighlightMouseLeave: () => this.handleHighlightMouseLeave(),
-      onAnnotationContextMenu: (e: MouseEvent, annotationId: string) => this.handleAnnotationContextMenu(e, annotationId),
-      relationshipStartAnnotationId: this.relationshipStartAnnotationId,
-      hoveredAnnotationId: this.hoveredAnnotationId
+    // 高亮项类型
+    interface HighlightItem {
+      start: number
+      end: number
+      content: string
+      type: 'annotation' | 'editing'
+      annotation?: AnnotationItem
+    }
+
+    const lineAnnotations = getAnnotationsByLineId(this.annotations, line.id)
+
+    // 如果没有标注且没有正在编辑的选中文本，直接返回原文本
+    if (lineAnnotations.length === 0 && !isEditingThisLine) {
+      return line.content || '\u00A0'
+    }
+
+    // 按start位置排序标注，确保按顺序处理
+    const sortedAnnotations = [...lineAnnotations].sort((a, b) => a.start - b.start)
+
+    // 构建高亮后的内容片段
+    const fragments: Array<string | ReturnType<typeof html>> = []
+    let lastIndex = 0
+
+    // 合并标注和正在编辑的选中文本，统一处理
+    const allHighlights: HighlightItem[] = []
+
+    // 检查正在编辑的选中文本是否与某个标注完全重叠
+    let editingOverlapsAnnotation = false
+    let overlappedAnnotation: AnnotationItem | null = null
+    if (isEditingThisLine && this.selectedTextInfo) {
+      const { start, end } = this.selectedTextInfo
+      // 查找是否有标注与正在编辑的选中文本完全重叠
+      overlappedAnnotation = sortedAnnotations.find(annotation => annotation.start === start && annotation.end === end) || null
+      editingOverlapsAnnotation = !!overlappedAnnotation
+    }
+
+    // 添加标注（如果正在编辑的选中文本与某个标注完全重叠，跳过该标注）
+    sortedAnnotations.forEach(annotation => {
+      // 如果正在编辑的选中文本与这个标注完全重叠，跳过这个标注
+      if (editingOverlapsAnnotation && overlappedAnnotation && annotation.id === overlappedAnnotation.id) {
+        return
+      }
+      allHighlights.push({
+        start: annotation.start,
+        end: annotation.end,
+        content: annotation.content,
+        type: 'annotation',
+        annotation
+      })
     })
+
+    // 添加正在编辑的选中文本
+    if (isEditingThisLine && this.selectedTextInfo) {
+      const { start, end, content } = this.selectedTextInfo
+      allHighlights.push({
+        start,
+        end,
+        content,
+        type: 'editing'
+      })
+    }
+
+    // 按start位置排序所有高亮
+    allHighlights.sort((a, b) => a.start - b.start)
+
+    allHighlights.forEach(highlight => {
+      const { start, end, content, type, annotation } = highlight
+
+      // 跳过已经处理过的标注（处理重叠情况）
+      if (start < lastIndex) {
+        return
+      }
+
+      // 添加标注前的文本
+      if (start > lastIndex) {
+        fragments.push(line.content.substring(lastIndex, start))
+      }
+
+      // 验证内容是否匹配
+      const actualContent = line.content.substring(start, end)
+      if (actualContent === content) {
+        if (type === 'editing') {
+          // 正在编辑的选中文本，使用特殊样式
+          fragments.push(html`<span class="line-selection-highlight">${content}<span class="line-selection-highlight-border"></span></span>`)
+        } else if (annotation) {
+          // 添加高亮的标注文本
+          // 如果存在 color，通过 CSS 变量设置，否则使用默认值
+          const styleAttr = annotation.color ? `--highlight-color: ${annotation.color};` : ''
+          // 如果这个标注区域与正在编辑的选中文本重叠，添加 editing 类
+          const editingClass =
+            isEditingThisLine && this.selectedTextInfo && start === this.selectedTextInfo.start && end === this.selectedTextInfo.end ? ' editing' : ''
+
+          // 判断是否需要高亮（起点标注或悬停的标注）
+          const isStartAnnotation = this.relationshipStartAnnotationId === annotation.id
+          const isHoveredAnnotation = this.hoveredAnnotationId === annotation.id
+          const highlightClass = isStartAnnotation ? ' creating-relationship-start' : isHoveredAnnotation ? ' creating-relationship-hover' : ''
+
+          fragments.push(
+            html`<span
+              class="line-highlight${editingClass}${highlightClass}"
+              data-anno-id=${`anno-${annotation.id}`}
+              style=${styleAttr}
+              @mouseenter=${() => this.handleHighlightMouseEnter()}
+              @mouseleave=${() => this.handleHighlightMouseLeave()}
+              @contextmenu=${(e: MouseEvent) => this.handleAnnotationContextMenu(e, annotation.id)}
+              >${content}<span class="line-highlight-border"></span><span class="line-highlight-desc">${annotation.type}</span></span
+            >`
+          )
+        }
+        lastIndex = end
+      } else {
+        // 如果内容不匹配，跳过这个标注，不更新lastIndex
+        return
+      }
+    })
+
+    // 添加剩余的文本
+    if (lastIndex < line.content.length) {
+      fragments.push(line.content.substring(lastIndex))
+    }
+
+    // 如果没有内容，返回空格
+    if (fragments.length === 0) {
+      return '\u00A0'
+    }
+
+    // 使用html模板渲染所有片段
+    return html`${fragments}`
   }
 
   /**
@@ -1559,46 +1910,6 @@ export class YsTextAnnotation extends LitElement {
                 `
               )}
             </div>
-
-            <!-- 编辑层 -->
-            ${this.editLayerVisible
-              ? html`<div class="edit-layer" style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;">
-                  ${this.isEditingRelationship
-                    ? html`
-                        <select
-                          required
-                          .value=${this.selectedRelationshipType}
-                          @change=${this.handleTypeSelectChange}
-                          @keydown=${this.handleInputKeyDown}
-                        >
-                          <option value="" disabled>选择关系类型</option>
-                          ${this.relationshipType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
-                        </select>
-                        <input
-                          type="text"
-                          .value=${this.editInputValue}
-                          @input=${this.handleInputChange}
-                          @keydown=${this.handleInputKeyDown}
-                          placeholder="输入描述（可选）"
-                        />
-                        <button @click=${this.handleConfirmEdit}>确认</button>
-                      `
-                    : html`
-                        <select required .value=${this.selectedAnnotationType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
-                          <option value="" disabled>选择类型</option>
-                          ${this.annotationType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
-                        </select>
-                        <input
-                          type="text"
-                          .value=${this.editInputValue}
-                          @input=${this.handleInputChange}
-                          @keydown=${this.handleInputKeyDown}
-                          placeholder="输入描述（可选）"
-                        />
-                        <button @click=${this.handleConfirmEdit}>确认</button>
-                      `}
-                </div>`
-              : null}
           </div>
         </div>
 
@@ -1651,6 +1962,41 @@ export class YsTextAnnotation extends LitElement {
               `
             : null}
         </div>
+
+        <!-- 编辑层 -->
+        ${this.editLayerVisible
+          ? html`<div class="edit-layer" style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;">
+              ${this.isEditingRelationship
+                ? html`
+                    <select required .value=${this.selectedRelationshipType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
+                      <option value="" disabled>选择关系类型</option>
+                      ${this.relationshipType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+                    </select>
+                    <input
+                      type="text"
+                      .value=${this.editInputValue}
+                      @input=${this.handleInputChange}
+                      @keydown=${this.handleInputKeyDown}
+                      placeholder="输入描述（可选）"
+                    />
+                    <button @click=${this.handleConfirmEdit}>确认</button>
+                  `
+                : html`
+                    <select required .value=${this.selectedAnnotationType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
+                      <option value="" disabled>选择类型</option>
+                      ${this.annotationType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+                    </select>
+                    <input
+                      type="text"
+                      .value=${this.editInputValue}
+                      @input=${this.handleInputChange}
+                      @keydown=${this.handleInputKeyDown}
+                      placeholder="输入描述（可选）"
+                    />
+                    <button @click=${this.handleConfirmEdit}>确认</button>
+                  `}
+            </div>`
+          : null}
 
         <!-- 右键菜单层 -->
         ${this.contextMenuVisible
