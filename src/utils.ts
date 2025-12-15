@@ -95,15 +95,44 @@ export interface BezierCurveResult {
 
 export function calculateBezierCurvePath(startPos: { x: number; y: number }, endPos: { x: number; y: number }, label?: string): BezierCurveResult {
   // 生成贝塞尔曲线路径（从起点中心到终点中心）
-  const controlOffset = Math.abs(endPos.y - startPos.y) / 2
   const startX = startPos.x
   const startY = startPos.y
   const endX = endPos.x
   const endY = endPos.y
-  const control1X = startX
-  const control1Y = startY + controlOffset
-  const control2X = endX
-  const control2Y = endY - controlOffset
+
+  const dx = endX - startX
+  const dy = endY - startY
+
+  let control1X: number
+  let control1Y: number
+  let control2X: number
+  let control2Y: number
+
+  // 如果垂直方向差值更大，使用原来的上下弯曲方式
+  if (Math.abs(dy) >= Math.abs(dx)) {
+    const controlOffset = Math.abs(dy) / 2
+    control1X = startX
+    control1Y = startY + controlOffset
+    control2X = endX
+    control2Y = endY - controlOffset
+  } else {
+    // 如果水平方向差值更大（典型：左右排列、内容区 -> 右侧 aside），则左右弯曲
+    // 并保证：
+    // - dx > 0 时：从左向右发出 / 从左侧水平进入
+    // - dx < 0 时：从右向左发出 / 从右侧水平进入
+    const controlOffset = Math.abs(dx) / 2
+    if (dx >= 0) {
+      // 路径整体从左往右：起点切线向右，终点切线也向右
+      control1X = startX + controlOffset
+      control2X = endX - controlOffset
+    } else {
+      // 路径整体从右往左：起点切线向左，终点切线也向左
+      control1X = startX - controlOffset
+      control2X = endX + controlOffset
+    }
+    control1Y = startY
+    control2Y = endY
+  }
 
   const d = `M ${startX} ${startY} C ${control1X} ${control1Y}, ${control2X} ${control2Y}, ${endX} ${endY}`
 

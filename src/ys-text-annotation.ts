@@ -509,6 +509,154 @@ export class YsTextAnnotation extends LitElement {
   /**
    * 计算已渲染标注的相对坐标，生成关系路径
    */
+  /**
+   * 根据标注ID查找其在 groupedAnnotations 中的位置百分比
+   */
+  private getAnnotationPositionPercent(annotationId: string): number | null {
+    for (const group of this.groupedAnnotations) {
+      if (group.annotations.some(ann => ann.id === annotationId)) {
+        return group.positionPercent
+      }
+    }
+    return null
+  }
+
+  /**
+   * 根据位置百分比计算 aside-container 中对应位置的坐标（相对于 virtualListLayer）
+   */
+  private getAsidePositionFromPercent(positionPercent: number, virtualListLayer: HTMLElement): { x: number; y: number } | null {
+    const asideContainer = this.shadowRoot?.querySelector('.aside-container') as HTMLElement
+    if (!asideContainer) return null
+
+    const asideRect = asideContainer.getBoundingClientRect()
+    const layerRect = virtualListLayer.getBoundingClientRect()
+
+    // 计算 aside-container 中对应位置的 Y 坐标（相对于 aside-container）
+    const asideY = (positionPercent / 100) * asideRect.height
+
+    // 转换为相对于 virtualListLayer 的坐标
+    // X 坐标：使用 virtualListLayer 的右边缘（即 content-wrapper 的最右侧）
+    const x = layerRect.right - layerRect.left
+    // Y 坐标：aside-container 顶部 + 计算出的 Y 位置 - virtualListLayer 顶部
+    const y = asideRect.top + asideY - layerRect.top
+
+    return { x, y }
+  }
+
+  /**
+   * 获取元素在 virtualListLayer 内的相对矩形信息
+   */
+  private getElementRectRelativeToLayer(
+    element: HTMLElement,
+    virtualListLayer: HTMLElement
+  ): { left: number; right: number; top: number; bottom: number; width: number; height: number } {
+    const elementRect = element.getBoundingClientRect()
+    const layerRect = virtualListLayer.getBoundingClientRect()
+
+    const left = elementRect.left - layerRect.left
+    const top = elementRect.top - layerRect.top
+    const width = elementRect.width
+    const height = elementRect.height
+
+    return {
+      left,
+      top,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height
+    }
+  }
+
+  /**
+   * 获取元素右侧中间点（相对于 virtualListLayer）
+   */
+  private getElementRightMiddlePosition(element: HTMLElement, virtualListLayer: HTMLElement): { x: number; y: number } {
+    const rect = this.getElementRectRelativeToLayer(element, virtualListLayer)
+    return {
+      x: rect.right,
+      y: rect.top + rect.height / 2
+    }
+  }
+
+  /**
+   * 根据起点/终点元素的相对位置，计算更符合直觉的连接锚点：
+   * - 左右排列：左侧标注的右边中间 -> 右侧标注的左边中间
+   * - 上下排列：上侧标注的底部中间 -> 下侧标注的顶部中间
+   */
+  private getConnectionPointsBetweenElements(
+    startElement: HTMLElement,
+    endElement: HTMLElement,
+    virtualListLayer: HTMLElement
+  ): { startPos: { x: number; y: number }; endPos: { x: number; y: number } } {
+    const startRect = this.getElementRectRelativeToLayer(startElement, virtualListLayer)
+    const endRect = this.getElementRectRelativeToLayer(endElement, virtualListLayer)
+
+    const startCenterX = (startRect.left + startRect.right) / 2
+    const startCenterY = (startRect.top + startRect.bottom) / 2
+    const endCenterX = (endRect.left + endRect.right) / 2
+    const endCenterY = (endRect.top + endRect.bottom) / 2
+
+    const dx = endCenterX - startCenterX
+    const dy = endCenterY - startCenterY
+    // 优先：上下排列（|dy| >= |dx|）→ 上下连接
+    // 其次：左右排列（|dy| < |dx|）→ 左右连接
+
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      // 上下排列
+      if (startCenterY <= endCenterY) {
+        // start 在上：上侧标注底部中间 -> 下侧标注顶部中间
+        return {
+          startPos: {
+            x: startRect.left + startRect.width / 2,
+            y: startRect.bottom
+          },
+          endPos: {
+            x: endRect.left + endRect.width / 2,
+            y: endRect.top
+          }
+        }
+      }
+      // start 在下：下侧标注顶部中间 -> 上侧标注底部中间
+      return {
+        startPos: {
+          x: startRect.left + startRect.width / 2,
+          y: startRect.top
+        },
+        endPos: {
+          x: endRect.left + endRect.width / 2,
+          y: endRect.bottom
+        }
+      }
+    }
+
+    // 左右排列
+    if (startCenterX <= endCenterX) {
+      // start 在左：左侧标注右边中间 -> 右侧标注左边中间
+      return {
+        startPos: {
+          x: startRect.right,
+          y: startRect.top + startRect.height / 2
+        },
+        endPos: {
+          x: endRect.left,
+          y: endRect.top + endRect.height / 2
+        }
+      }
+    }
+    // start 在右：右侧标注左边中间 -> 左侧标注右边中间
+    return {
+      startPos: {
+        x: startRect.left,
+        y: startRect.top + startRect.height / 2
+      },
+      endPos: {
+        x: endRect.right,
+        y: endRect.top + endRect.height / 2
+      }
+    }
+  }
+
   private measureRelationships() {
     if (!this.scrollContainer) return
 
@@ -543,11 +691,36 @@ export class YsTextAnnotation extends LitElement {
       const startElement = this.shadowRoot.querySelector(`[data-anno-id="anno-${startId}"]`) as HTMLElement
       const endElement = this.shadowRoot.querySelector(`[data-anno-id="anno-${endId}"]`) as HTMLElement
 
-      // 如果起点或终点元素不存在（未渲染），跳过
-      if (!startElement || !endElement) continue
+      let startPos: { x: number; y: number } | null = null
+      let endPos: { x: number; y: number } | null = null
 
-      const startPos = getElementCenterPosition(startElement, virtualListLayer)
-      const endPos = getElementCenterPosition(endElement, virtualListLayer)
+      // 情况1：起点和终点都存在，根据相对位置计算更自然的连接锚点
+      if (startElement && endElement) {
+        const connection = this.getConnectionPointsBetweenElements(startElement, endElement, virtualListLayer)
+        startPos = connection.startPos
+        endPos = connection.endPos
+      }
+      // 情况2：只存在起点，连接 aside-container 中终点对应的位置
+      else if (startElement && !endElement) {
+        // 标注端使用右侧中间点
+        startPos = this.getElementRightMiddlePosition(startElement, virtualListLayer)
+        const endPositionPercent = this.getAnnotationPositionPercent(endId)
+        if (endPositionPercent !== null) {
+          endPos = this.getAsidePositionFromPercent(endPositionPercent, virtualListLayer)
+        }
+      }
+      // 情况3：只存在终点，连接 aside-container 中起点对应的位置，然后连接起点和终点
+      else if (!startElement && endElement) {
+        const startPositionPercent = this.getAnnotationPositionPercent(startId)
+        if (startPositionPercent !== null) {
+          startPos = this.getAsidePositionFromPercent(startPositionPercent, virtualListLayer)
+        }
+        // 标注端使用右侧中间点
+        endPos = this.getElementRightMiddlePosition(endElement, virtualListLayer)
+      }
+
+      // 如果起点或终点位置无法确定，跳过
+      if (!startPos || !endPos) continue
 
       // 生成贝塞尔曲线路径（从起点中心到终点中心）
       const bezierResult = calculateBezierCurvePath(startPos, endPos, labelText)
@@ -1610,7 +1783,8 @@ export class YsTextAnnotation extends LitElement {
     }
 
     // 如果点击的是同一个分组，则关闭列表
-    if (this.selectedGroup && this.selectedGroup.annotations === annotations) {
+    // 使用 positionPercent 比较而不是数组引用，因为 updateGroupedAnnotations 会创建新的数组实例
+    if (this.selectedGroup && this.selectedGroup.positionPercent === positionPercent) {
       this.selectedGroup = null
     } else {
       // 显示标注列表
@@ -1721,7 +1895,6 @@ export class YsTextAnnotation extends LitElement {
               class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}"
               style="transform: translateY(${offsetTop}px); padding-bottom: ${bottomPadding}px;"
             >
-              <!-- ${visibleLines.map(line => html`<div class="line">${this.renderLineContent(line)}</div>`)} -->
               ${visibleLines.map(
                 line => html`
                   <div class="line">
@@ -1739,7 +1912,7 @@ export class YsTextAnnotation extends LitElement {
           ${this.groupedAnnotations.map(
             group => html`
               <div
-                class="annotation-marker ${group.annotations.length > 1 ? 'merged' : ''} ${this.selectedGroup?.annotations === group.annotations
+                class="annotation-marker ${group.annotations.length > 1 ? 'merged' : ''} ${this.selectedGroup?.positionPercent === group.positionPercent
                   ? 'selected'
                   : ''}"
                 style="top: ${group.positionPercent}%; background-color: ${getGroupColor(group.annotations, this.annotationType)};"
