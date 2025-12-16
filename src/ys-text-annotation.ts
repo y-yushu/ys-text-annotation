@@ -1059,7 +1059,7 @@ export class YsTextAnnotation extends LitElement {
       this.annotations = this.annotations.map(ann => (ann.id === updatedAnnotation.id ? updatedAnnotation : ann))
     } else {
       // 创建模式：创建新标注
-      const newId = `anno-${Date.now()}`
+      const newId = `${Date.now()}`
       const newAnnotation: AnnotationItem = {
         id: newId,
         lineId: this.selectedTextInfo.lineId,
