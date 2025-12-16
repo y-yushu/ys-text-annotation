@@ -82,6 +82,8 @@ export interface RelationshipPath {
   labelX?: number
   labelY?: number
   labelAngle?: number
+  startPos: { x: number; y: number }
+  endPos: { x: number; y: number }
 }
 
 // 选中的文本信息
@@ -116,7 +118,8 @@ export const mockRelationship: RelationshipItem[] = [
   { id: '1-2', startId: '1', endId: '2', type: '', description: '', color: '#df970b' },
   { id: '1-3', startId: '1', endId: '3', type: '关系2', description: '', color: '#53df0b' },
   { id: '3-5', startId: '3', endId: '5', type: '关系3', description: '', color: '#722ed1' },
-  { id: '3-7', startId: '3', endId: '7', type: '关系3', description: '', color: '#722ed1' }
+  { id: '3-7', startId: '3', endId: '7', type: '关系3', description: '', color: '#722ed1' },
+  { id: '9-7', startId: '9', endId: '7', type: '关系3', description: '', color: '#722ed1' }
 ]
 
 // 默认标注类型

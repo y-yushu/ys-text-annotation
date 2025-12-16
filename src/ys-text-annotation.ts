@@ -10,7 +10,12 @@ import {
   measureLineHeight,
   getTextOffsetInLine,
   getAnnotationsByLineId,
-  calculateBezierCurvePath,
+  calculateSBezierCurvePath,
+  calculateAnnotationToAnnotationConnection,
+  calculateAsidePosition,
+  calculateAnnotationKeyPoints,
+  ConnectionDirection,
+  type ConnectionDirectionType,
   hasOverlapWithAnnotations,
   getElementCenterPosition,
   findAnnotationElement,
@@ -522,145 +527,28 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
-   * 根据位置百分比计算 aside-container 中对应位置的坐标（相对于 virtualListLayer）
+   * 根据位置百分比查找对应的标记元素
    */
-  private getAsidePositionFromPercent(positionPercent: number, virtualListLayer: HTMLElement): { x: number; y: number } | null {
-    const asideContainer = this.shadowRoot?.querySelector('.aside-container') as HTMLElement
-    if (!asideContainer) return null
+  private findMarkerByPositionPercent(positionPercent: number, asideContainer: HTMLElement): HTMLElement | null {
+    const markers = asideContainer.querySelectorAll('.annotation-marker')
+    for (const marker of Array.from(markers) as HTMLElement[]) {
+      // 获取标记的style.top值（百分比）
+      const markerStyle = window.getComputedStyle(marker)
+      const markerTopPercent = parseFloat(markerStyle.top)
 
-    const asideRect = asideContainer.getBoundingClientRect()
-    const layerRect = virtualListLayer.getBoundingClientRect()
-
-    // 计算 aside-container 中对应位置的 Y 坐标（相对于 aside-container）
-    const asideY = (positionPercent / 100) * asideRect.height
-
-    // 转换为相对于 virtualListLayer 的坐标
-    // X 坐标：使用 virtualListLayer 的右边缘（即 content-wrapper 的最右侧）
-    const x = layerRect.right - layerRect.left
-    // Y 坐标：aside-container 顶部 + 计算出的 Y 位置 - virtualListLayer 顶部
-    const y = asideRect.top + asideY - layerRect.top
-
-    return { x, y }
-  }
-
-  /**
-   * 获取元素在 virtualListLayer 内的相对矩形信息
-   */
-  private getElementRectRelativeToLayer(
-    element: HTMLElement,
-    virtualListLayer: HTMLElement
-  ): { left: number; right: number; top: number; bottom: number; width: number; height: number } {
-    const elementRect = element.getBoundingClientRect()
-    const layerRect = virtualListLayer.getBoundingClientRect()
-
-    const left = elementRect.left - layerRect.left
-    const top = elementRect.top - layerRect.top
-    const width = elementRect.width
-    const height = elementRect.height
-
-    return {
-      left,
-      top,
-      right: left + width,
-      bottom: top + height,
-      width,
-      height
-    }
-  }
-
-  /**
-   * 获取元素右侧中间点（相对于 virtualListLayer）
-   */
-  private getElementRightMiddlePosition(element: HTMLElement, virtualListLayer: HTMLElement): { x: number; y: number } {
-    const rect = this.getElementRectRelativeToLayer(element, virtualListLayer)
-    return {
-      x: rect.right,
-      y: rect.top + rect.height / 2
-    }
-  }
-
-  /**
-   * 根据起点/终点元素的相对位置，计算更符合直觉的连接锚点：
-   * - 左右排列：左侧标注的右边中间 -> 右侧标注的左边中间
-   * - 上下排列：上侧标注的底部中间 -> 下侧标注的顶部中间
-   */
-  private getConnectionPointsBetweenElements(
-    startElement: HTMLElement,
-    endElement: HTMLElement,
-    virtualListLayer: HTMLElement
-  ): { startPos: { x: number; y: number }; endPos: { x: number; y: number } } {
-    const startRect = this.getElementRectRelativeToLayer(startElement, virtualListLayer)
-    const endRect = this.getElementRectRelativeToLayer(endElement, virtualListLayer)
-
-    const startCenterX = (startRect.left + startRect.right) / 2
-    const startCenterY = (startRect.top + startRect.bottom) / 2
-    const endCenterX = (endRect.left + endRect.right) / 2
-    const endCenterY = (endRect.top + endRect.bottom) / 2
-
-    const dx = endCenterX - startCenterX
-    const dy = endCenterY - startCenterY
-    // 优先：上下排列（|dy| >= |dx|）→ 上下连接
-    // 其次：左右排列（|dy| < |dx|）→ 左右连接
-
-    if (Math.abs(dy) >= Math.abs(dx)) {
-      // 上下排列
-      if (startCenterY <= endCenterY) {
-        // start 在上：上侧标注底部中间 -> 下侧标注顶部中间
-        return {
-          startPos: {
-            x: startRect.left + startRect.width / 2,
-            y: startRect.bottom
-          },
-          endPos: {
-            x: endRect.left + endRect.width / 2,
-            y: endRect.top
-          }
-        }
-      }
-      // start 在下：下侧标注顶部中间 -> 上侧标注底部中间
-      return {
-        startPos: {
-          x: startRect.left + startRect.width / 2,
-          y: startRect.top
-        },
-        endPos: {
-          x: endRect.left + endRect.width / 2,
-          y: endRect.bottom
-        }
+      // 如果标记的位置百分比接近目标位置百分比（容差0.1%）
+      if (Math.abs(markerTopPercent - positionPercent) < 0.1) {
+        return marker
       }
     }
-
-    // 左右排列
-    if (startCenterX <= endCenterX) {
-      // start 在左：左侧标注右边中间 -> 右侧标注左边中间
-      return {
-        startPos: {
-          x: startRect.right,
-          y: startRect.top + startRect.height / 2
-        },
-        endPos: {
-          x: endRect.left,
-          y: endRect.top + endRect.height / 2
-        }
-      }
-    }
-    // start 在右：右侧标注左边中间 -> 左侧标注右边中间
-    return {
-      startPos: {
-        x: startRect.left,
-        y: startRect.top + startRect.height / 2
-      },
-      endPos: {
-        x: endRect.right,
-        y: endRect.top + endRect.height / 2
-      }
-    }
+    return null
   }
 
   private measureRelationships() {
     if (!this.scrollContainer) return
 
     const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
+    const asideContainer = this.shadowRoot?.querySelector('.aside-container') as HTMLElement
 
     // 获取 virtual-list-layer 的实际高度，用于同步 SVG 层高度
     if (virtualListLayer) {
@@ -670,7 +558,7 @@ export class YsTextAnnotation extends LitElement {
       }
     }
 
-    if (!this.shadowRoot || !virtualListLayer) {
+    if (!this.shadowRoot || !virtualListLayer || !asideContainer) {
       this.relationshipPaths = []
       return
     }
@@ -693,37 +581,71 @@ export class YsTextAnnotation extends LitElement {
 
       let startPos: { x: number; y: number } | null = null
       let endPos: { x: number; y: number } | null = null
+      let startDirection: ConnectionDirectionType | null = null
+      let endDirection: ConnectionDirectionType | null = null
 
-      // 情况1：起点和终点都存在，根据相对位置计算更自然的连接锚点
+      // 情况1：标注与标注绘制
       if (startElement && endElement) {
-        const connection = this.getConnectionPointsBetweenElements(startElement, endElement, virtualListLayer)
+        const connection = calculateAnnotationToAnnotationConnection(startElement, endElement, virtualListLayer)
         startPos = connection.startPos
         endPos = connection.endPos
+        startDirection = connection.startDirection
+        endDirection = connection.endDirection
       }
-      // 情况2：只存在起点，连接 aside-container 中终点对应的位置
+      // 情况2：标注与aside绘制（只存在起点标注）
       else if (startElement && !endElement) {
-        // 标注端使用右侧中间点
-        startPos = this.getElementRightMiddlePosition(startElement, virtualListLayer)
+        // 标注端使用右侧垂直中心点
+        const annotationPoints = calculateAnnotationKeyPoints(startElement, virtualListLayer)
+        startPos = annotationPoints.rightCenter
+        startDirection = ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL
+
+        // aside端位置
         const endPositionPercent = this.getAnnotationPositionPercent(endId)
         if (endPositionPercent !== null) {
-          endPos = this.getAsidePositionFromPercent(endPositionPercent, virtualListLayer)
+          // 查找对应的标记元素
+          const markerElement = this.findMarkerByPositionPercent(endPositionPercent, asideContainer)
+          const asidePos = calculateAsidePosition(endPositionPercent, this.scrollContainer!, asideContainer, virtualListLayer, markerElement)
+          if (asidePos) {
+            endPos = asidePos
+            endDirection = ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL
+          }
         }
       }
-      // 情况3：只存在终点，连接 aside-container 中起点对应的位置，然后连接起点和终点
+      // 情况3：标注与aside绘制（只存在终点标注）
       else if (!startElement && endElement) {
+        // aside端位置
         const startPositionPercent = this.getAnnotationPositionPercent(startId)
         if (startPositionPercent !== null) {
-          startPos = this.getAsidePositionFromPercent(startPositionPercent, virtualListLayer)
+          // 查找对应的标记元素
+          const markerElement = this.findMarkerByPositionPercent(startPositionPercent, asideContainer)
+          const asidePos = calculateAsidePosition(startPositionPercent, this.scrollContainer!, asideContainer, virtualListLayer, markerElement)
+          if (asidePos) {
+            startPos = asidePos
+            // aside在右侧，标注在左侧，所以从aside出发应该是从右向左
+            startDirection = ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL
+
+            // 获取标注的所有关键点
+            const annotationPoints = calculateAnnotationKeyPoints(endElement, virtualListLayer)
+
+            // 根据aside和标注的垂直位置关系，选择合适的终点
+            if (asidePos.y < annotationPoints.center.y) {
+              // aside在标注上侧，使用标注的顶部中心点
+              endPos = annotationPoints.topCenter
+              endDirection = ConnectionDirection.TOP_TO_BOTTOM_VERTICAL
+            } else {
+              // aside在标注下侧，使用标注的底部中心点
+              endPos = annotationPoints.bottomCenter
+              endDirection = ConnectionDirection.BOTTOM_TO_TOP_VERTICAL
+            }
+          }
         }
-        // 标注端使用右侧中间点
-        endPos = this.getElementRightMiddlePosition(endElement, virtualListLayer)
       }
 
       // 如果起点或终点位置无法确定，跳过
-      if (!startPos || !endPos) continue
+      if (!startPos || !endPos || !startDirection || !endDirection) continue
 
-      // 生成贝塞尔曲线路径（从起点中心到终点中心）
-      const bezierResult = calculateBezierCurvePath(startPos, endPos, labelText)
+      // 生成S形贝塞尔曲线路径，确保在连接点垂直
+      const bezierResult = calculateSBezierCurvePath(startPos, endPos, startDirection, endDirection, labelText)
       paths.push({
         id,
         d: bezierResult.d,
@@ -731,7 +653,9 @@ export class YsTextAnnotation extends LitElement {
         color: pathColor,
         labelX: bezierResult.labelX,
         labelY: bezierResult.labelY,
-        labelAngle: bezierResult.labelAngle
+        labelAngle: bezierResult.labelAngle,
+        startPos,
+        endPos
       })
     }
 
@@ -1843,7 +1767,48 @@ export class YsTextAnnotation extends LitElement {
               style="transform: translateY(${offsetTop}px); height: ${visibleHeight}px;"
               overflow="visible"
             >
+              <defs>
+                ${this.relationshipPaths.map(path => {
+                  // 为每个路径生成唯一的marker ID
+                  const endMarkerId = `arrowhead-end-${path.id}`
+                  const startMarkerId = `arrowhead-start-${path.id}`
+
+                  return svg`
+                    <marker
+                      id=${endMarkerId}
+                      markerWidth="6"
+                      markerHeight="6"
+                      refX="3"
+                      refY="3"
+                      orient="auto"
+                    >
+                      <circle 
+                        cx="3" 
+                        cy="3" 
+                        r="2.5" 
+                        fill="none" 
+                        stroke=${path.color}
+                        stroke-width="1.5"
+                      />
+                    </marker>
+                    <marker
+                      id=${startMarkerId}
+                      markerWidth="10"
+                      markerHeight="10"
+                      refX="1"
+                      refY="3"
+                      orient="auto"
+                    >
+                      <circle cx="3" cy="3" r="2.5" fill=${path.color} />
+                    </marker>
+                  `
+                })}
+              </defs>
               ${this.relationshipPaths.map(path => {
+                // 为每个路径生成唯一的marker ID
+                const endMarkerId = `arrowhead-end-${path.id}`
+                const startMarkerId = `arrowhead-start-${path.id}`
+
                 if (path.label && path.labelX !== undefined && path.labelY !== undefined && path.labelAngle !== undefined) {
                   return svg`
                     <path
@@ -1851,6 +1816,8 @@ export class YsTextAnnotation extends LitElement {
                       d=${path.d}
                       data-rel-id=${path.id}
                       stroke=${path.color}
+                      marker-end=${`url(#${endMarkerId})`}
+                      marker-start=${`url(#${startMarkerId})`}
                       @mouseenter=${this.handleHighlightMouseEnter}
                       @mouseleave=${this.handleHighlightMouseLeave}
                       @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
@@ -1873,6 +1840,8 @@ export class YsTextAnnotation extends LitElement {
                     d=${path.d}
                     data-rel-id=${path.id}
                     stroke=${path.color}
+                    marker-end=${`url(#${endMarkerId})`}
+                    marker-start=${`url(#${startMarkerId})`}
                     @mouseenter=${this.handleHighlightMouseEnter}
                     @mouseleave=${this.handleHighlightMouseLeave}
                     @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}

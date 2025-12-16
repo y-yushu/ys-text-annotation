@@ -93,6 +93,165 @@ export interface BezierCurveResult {
   labelAngle?: number
 }
 
+/**
+ * 连接方向枚举
+ */
+export const ConnectionDirection = {
+  /** 从左向右水平连接 */
+  LEFT_TO_RIGHT_HORIZONTAL: 'left_to_right_horizontal',
+  /** 从右向左水平连接 */
+  RIGHT_TO_LEFT_HORIZONTAL: 'right_to_left_horizontal',
+  /** 从上到下垂直连接 */
+  TOP_TO_BOTTOM_VERTICAL: 'top_to_bottom_vertical',
+  /** 从下到上垂直连接 */
+  BOTTOM_TO_TOP_VERTICAL: 'bottom_to_top_vertical'
+} as const
+
+export type ConnectionDirectionType = (typeof ConnectionDirection)[keyof typeof ConnectionDirection]
+
+/**
+ * 计算S形贝塞尔曲线路径，确保在连接点垂直
+ * @param startPos 起点位置
+ * @param endPos 终点位置
+ * @param startDirection 起点连接方向
+ * @param endDirection 终点连接方向
+ * @param label 可选的标签文本
+ * @returns 贝塞尔曲线路径结果
+ */
+export function calculateSBezierCurvePath(
+  startPos: { x: number; y: number },
+  endPos: { x: number; y: number },
+  startDirection: ConnectionDirectionType,
+  endDirection: ConnectionDirectionType,
+  label?: string
+): BezierCurveResult {
+  const startX = startPos.x
+  const startY = startPos.y
+  const endX = endPos.x
+  const endY = endPos.y
+
+  const dx = endX - startX
+  const dy = endY - startY
+
+  // 计算控制点，确保在连接点垂直
+  // 控制点距离连接点的距离，用于创建S形曲线
+  const controlDistance = Math.max(Math.abs(dx), Math.abs(dy)) * 0.3
+  const minControlDistance = 30 // 最小控制距离
+  const maxControlDistance = 150 // 最大控制距离
+  const adjustedControlDistance = Math.max(minControlDistance, Math.min(maxControlDistance, controlDistance))
+
+  let control1X: number
+  let control1Y: number
+  let control2X: number
+  let control2Y: number
+
+  // 根据起点方向设置第一个控制点（确保起点垂直）
+  switch (startDirection) {
+    case ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL:
+      // 从左向右水平：起点切线向右（水平）
+      control1X = startX + adjustedControlDistance
+      control1Y = startY
+      break
+    case ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL:
+      // 从右向左水平：起点切线向左（水平）
+      control1X = startX - adjustedControlDistance
+      control1Y = startY
+      break
+    case ConnectionDirection.TOP_TO_BOTTOM_VERTICAL:
+      // 从上到下垂直：起点切线向下（垂直）
+      control1X = startX
+      control1Y = startY + adjustedControlDistance
+      break
+    case ConnectionDirection.BOTTOM_TO_TOP_VERTICAL:
+      // 从下到上垂直：起点切线向上（垂直）
+      control1X = startX
+      control1Y = startY - adjustedControlDistance
+      break
+  }
+
+  // 根据终点方向设置第二个控制点（确保终点垂直）
+  switch (endDirection) {
+    case ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL:
+      // 从左向右水平：终点切线向右（水平）
+      control2X = endX - adjustedControlDistance
+      control2Y = endY
+      break
+    case ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL:
+      // 从右向左水平：终点切线向左（水平）
+      control2X = endX + adjustedControlDistance
+      control2Y = endY
+      break
+    case ConnectionDirection.TOP_TO_BOTTOM_VERTICAL:
+      // 从上到下垂直：终点切线向下（垂直）
+      control2X = endX
+      control2Y = endY - adjustedControlDistance
+      break
+    case ConnectionDirection.BOTTOM_TO_TOP_VERTICAL:
+      // 从下到上垂直：终点切线向上（垂直）
+      control2X = endX
+      control2Y = endY + adjustedControlDistance
+      break
+  }
+
+  const d = `M ${startX} ${startY} C ${control1X} ${control1Y}, ${control2X} ${control2Y}, ${endX} ${endY}`
+
+  // 如果有标签，计算路径中间点的位置和角度
+  let labelX: number | undefined
+  let labelY: number | undefined
+  let labelAngle: number | undefined
+
+  if (label) {
+    // 计算三次贝塞尔曲线在 t=0.5 时的点（中间点）
+    // B(t) = (1-t)³P₀ + 3(1-t)²tP₁ + 3(1-t)t²P₂ + t³P₃
+    // 对于 t=0.5: B(0.5) = 0.125P₀ + 0.375P₁ + 0.375P₂ + 0.125P₃
+    labelX = 0.125 * startX + 0.375 * control1X + 0.375 * control2X + 0.125 * endX
+    labelY = 0.125 * startY + 0.375 * control1Y + 0.375 * control2Y + 0.125 * endY
+
+    // 计算切向量（导数）用于确定角度
+    // 三次贝塞尔曲线导数公式：B'(t) = 3(1-t)²(P₁-P₀) + 6(1-t)t(P₂-P₁) + 3t²(P₃-P₂)
+    // 对于 t=0.5: B'(0.5) = 0.75(P₁-P₀) + 1.5(P₂-P₁) + 0.75(P₃-P₂)
+    // 简化: B'(0.5) = 0.75(-P₀ - P₁ + P₂ + P₃)
+    const tangentX = 0.75 * (-startX - control1X + control2X + endX)
+    const tangentY = 0.75 * (-startY - control1Y + control2Y + endY)
+
+    // 计算角度（弧度转角度），注意 SVG 坐标系 y 向下，所以角度需要调整
+    // Math.atan2 返回的是从 x 轴正方向到向量的角度，范围是 -π 到 π
+    labelAngle = (Math.atan2(tangentY, tangentX) * 180) / Math.PI
+
+    // 如果角度超过 90 度，翻转文本（避免倒置）
+    if (Math.abs(labelAngle) > 90) {
+      labelAngle += 180
+    }
+
+    // 计算法向量（垂直于切向量，用于向上偏移标签）
+    // 法向量可以是 (-tangentY, tangentX) 或 (tangentY, -tangentX)
+    // 我们需要选择一个指向"上方"的法向量（在SVG坐标系中，y减小表示向上）
+    let normalX = -tangentY
+    let normalY = tangentX
+
+    // 如果法向量的y分量是正数（指向下方），则反转方向
+    // 因为SVG坐标系y向下，所以normalY为负表示向上
+    if (normalY > 0) {
+      normalX = tangentY
+      normalY = -tangentX
+    }
+
+    // 归一化法向量
+    const normalLength = Math.sqrt(normalX * normalX + normalY * normalY)
+    if (normalLength > 0) {
+      normalX = normalX / normalLength
+      normalY = normalY / normalLength
+    }
+
+    // 沿着法向量方向向上偏移标签位置（偏移距离设为 10px）
+    const offsetDistance = 10
+    labelX = labelX + normalX * offsetDistance
+    labelY = labelY + normalY * offsetDistance
+  }
+
+  return { d, labelX, labelY, labelAngle }
+}
+
 export function calculateBezierCurvePath(startPos: { x: number; y: number }, endPos: { x: number; y: number }, label?: string): BezierCurveResult {
   // 生成贝塞尔曲线路径（从起点中心到终点中心）
   const startX = startPos.x
@@ -463,6 +622,93 @@ export function hasOverlapWithAnnotations(lineId: number, start: number, end: nu
 }
 
 /**
+ * 标注关键点
+ */
+export interface AnnotationKeyPoints {
+  /** 左侧垂直中心点 */
+  leftCenter: { x: number; y: number }
+  /** 右侧垂直中心点 */
+  rightCenter: { x: number; y: number }
+  /** 整体中心点 */
+  center: { x: number; y: number }
+  /** 顶部水平中心点 */
+  topCenter: { x: number; y: number }
+  /** 底部水平中心点 */
+  bottomCenter: { x: number; y: number }
+}
+
+/**
+ * 计算标注的关键点位置（相对于 virtualListLayer）
+ * @param element 标注元素
+ * @param virtualListLayer 虚拟列表层元素
+ * @returns 包含5个关键点的对象
+ */
+export function calculateAnnotationKeyPoints(element: HTMLElement, virtualListLayer: HTMLElement): AnnotationKeyPoints {
+  const elementRect = element.getBoundingClientRect()
+  const layerRect = virtualListLayer.getBoundingClientRect()
+
+  // 计算元素相对于 layer 的位置
+  const left = elementRect.left - layerRect.left
+  const top = elementRect.top - layerRect.top
+  const right = left + elementRect.width
+  const bottom = top + elementRect.height
+  const centerX = left + elementRect.width / 2
+  const centerY = top + elementRect.height / 2
+
+  return {
+    leftCenter: { x: left, y: centerY },
+    rightCenter: { x: right, y: centerY },
+    center: { x: centerX, y: centerY },
+    topCenter: { x: centerX, y: top },
+    bottomCenter: { x: centerX, y: bottom + 8 }
+  }
+}
+
+/**
+ * 计算aside对应项的位置（相对于 virtualListLayer）
+ * 水平方向为scroll-container的最右侧，垂直方向为aside-container对应位置的中间
+ * @param positionPercent aside项的位置百分比（0-100）
+ * @param scrollContainer 滚动容器
+ * @param asideContainer aside容器
+ * @param virtualListLayer 虚拟列表层元素
+ * @param markerElement 可选的标记元素，如果提供则使用其实际高度计算中心位置
+ * @returns aside项的位置坐标，如果无法计算则返回null
+ */
+export function calculateAsidePosition(
+  positionPercent: number,
+  _scrollContainer: HTMLElement,
+  asideContainer: HTMLElement,
+  virtualListLayer: HTMLElement,
+  markerElement?: HTMLElement | null
+): { x: number; y: number } | null {
+  const asideRect = asideContainer.getBoundingClientRect()
+  const layerRect = virtualListLayer.getBoundingClientRect()
+
+  // 计算aside-container中对应位置的Y坐标（相对于aside-container顶部）
+  // positionPercent对应的是标记的顶部位置（通过CSS的top属性设置）
+  const asideYTop = (positionPercent / 100) * asideRect.height
+
+  // 获取标记的实际高度来计算中心位置
+  // 如果提供了标记元素，使用其实际高度；否则使用默认高度6px
+  let markerHeight = 6 // 默认标记高度
+  if (markerElement) {
+    markerHeight = markerElement.getBoundingClientRect().height
+  }
+
+  // 计算对应位置的中间（标记顶部 + 标记高度的一半）
+  const asideYCenter = asideYTop + markerHeight / 2
+
+  // 转换为相对于virtualListLayer的坐标
+  // X坐标：使用virtualListLayer的最右侧（scroll-container和aside-container的交汇处）
+  // 交汇处应该是virtualListLayer的右边缘，而不是scroll-container的右边缘
+  const x = layerRect.width
+  // Y坐标：aside-container顶部 + 计算出的Y中心位置 - virtualListLayer顶部
+  const y = asideRect.top + asideYCenter - layerRect.top
+
+  return { x, y }
+}
+
+/**
  * 获取元素中心相对于 virtualListLayer 的坐标
  */
 export function getElementCenterPosition(element: HTMLElement, virtualListLayer: HTMLElement): { x: number; y: number } {
@@ -589,6 +835,176 @@ export interface GroupedAnnotation {
   segmentIndex: number
   annotations: AnnotationItem[]
   positionPercent: number
+}
+
+/**
+ * 计算标注与标注之间的连接点和方向
+ * 根据相对位置判断：上下、左右、左上-右下、左下-右上
+ */
+export interface AnnotationConnectionResult {
+  startPos: { x: number; y: number }
+  endPos: { x: number; y: number }
+  startDirection: ConnectionDirectionType
+  endDirection: ConnectionDirectionType
+}
+
+export function calculateAnnotationToAnnotationConnection(
+  startElement: HTMLElement,
+  endElement: HTMLElement,
+  virtualListLayer: HTMLElement
+): AnnotationConnectionResult {
+  // 使用关键点计算函数获取起点和终点的关键点
+  const startPoints = calculateAnnotationKeyPoints(startElement, virtualListLayer)
+  const endPoints = calculateAnnotationKeyPoints(endElement, virtualListLayer)
+
+  const dx = endPoints.center.x - startPoints.center.x
+  const dy = endPoints.center.y - startPoints.center.y
+
+  // 判断相对位置
+  const absDx = Math.abs(dx)
+  const absDy = Math.abs(dy)
+
+  // 1. 上下排列：|dy| >= |dx|
+  if (absDy >= absDx) {
+    if (dy >= 0) {
+      // start在上，end在下：连接上方标注的底部水平中心点，和下方标注的顶部水平中心点
+      return {
+        startPos: startPoints.bottomCenter,
+        endPos: endPoints.topCenter,
+        startDirection: ConnectionDirection.TOP_TO_BOTTOM_VERTICAL,
+        endDirection: ConnectionDirection.TOP_TO_BOTTOM_VERTICAL
+      }
+    } else {
+      // start在下，end在上：连接下方标注的顶部水平中心点，和上方标注的底部水平中心点
+      return {
+        startPos: startPoints.topCenter,
+        endPos: endPoints.bottomCenter,
+        startDirection: ConnectionDirection.BOTTOM_TO_TOP_VERTICAL,
+        endDirection: ConnectionDirection.BOTTOM_TO_TOP_VERTICAL
+      }
+    }
+  }
+
+  // 2. 左右排列：|dx| > |dy| 且 dy 接近 0
+  if (absDx > absDy && absDy < absDx * 0.3) {
+    if (dx >= 0) {
+      // start在左，end在右：连接左侧标注的右侧垂直中心点，和右侧标注的左侧垂直中心点
+      return {
+        startPos: startPoints.rightCenter,
+        endPos: endPoints.leftCenter,
+        startDirection: ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL,
+        endDirection: ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL
+      }
+    } else {
+      // start在右，end在左：连接右侧标注的左侧垂直中心点，和左侧标注的右侧垂直中心点
+      return {
+        startPos: startPoints.leftCenter,
+        endPos: endPoints.rightCenter,
+        startDirection: ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL,
+        endDirection: ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL
+      }
+    }
+  }
+
+  // 3. 左上-右下排列：dx > 0 && dy > 0
+  if (dx > 0 && dy > 0) {
+    if (absDx > absDy) {
+      // 左右差距大：连接左上标注的底部水平中心点，和右下标注的左侧垂直中心点
+      return {
+        startPos: startPoints.bottomCenter,
+        endPos: endPoints.leftCenter,
+        startDirection: ConnectionDirection.TOP_TO_BOTTOM_VERTICAL,
+        endDirection: ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL
+      }
+    } else {
+      // 上下差距大：连接左上标注的右侧垂直中心点，和右下标注的顶部水平中心点
+      return {
+        startPos: startPoints.rightCenter,
+        endPos: endPoints.topCenter,
+        startDirection: ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL,
+        endDirection: ConnectionDirection.TOP_TO_BOTTOM_VERTICAL
+      }
+    }
+  }
+
+  // 4. 左下-右上排列：dx > 0 && dy < 0
+  if (dx > 0 && dy < 0) {
+    if (absDx > absDy) {
+      // 左右差距大：连接右上标注的底部水平中心点，和左下标注的右侧垂直中心点
+      return {
+        startPos: endPoints.bottomCenter,
+        endPos: startPoints.rightCenter,
+        startDirection: ConnectionDirection.TOP_TO_BOTTOM_VERTICAL,
+        endDirection: ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL
+      }
+    } else {
+      // 上下差距大：连接右上标注的左侧垂直中心点，和左下标注的顶部水平中心点
+      return {
+        startPos: endPoints.leftCenter,
+        endPos: startPoints.topCenter,
+        startDirection: ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL,
+        endDirection: ConnectionDirection.BOTTOM_TO_TOP_VERTICAL
+      }
+    }
+  }
+
+  // 5. 右上-左下排列：dx < 0 && dy > 0
+  if (dx < 0 && dy > 0) {
+    if (absDx > absDy) {
+      // 左右差距大：连接右上标注的底部水平中心点，和左下标注的右侧垂直中心点
+      return {
+        startPos: endPoints.bottomCenter,
+        endPos: startPoints.rightCenter,
+        startDirection: ConnectionDirection.TOP_TO_BOTTOM_VERTICAL,
+        endDirection: ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL
+      }
+    } else {
+      // 上下差距大：连接右上标注的左侧垂直中心点，和左下标注的顶部水平中心点
+      return {
+        startPos: endPoints.leftCenter,
+        endPos: startPoints.topCenter,
+        startDirection: ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL,
+        endDirection: ConnectionDirection.BOTTOM_TO_TOP_VERTICAL
+      }
+    }
+  }
+
+  // 6. 右下-左上排列：dx < 0 && dy < 0
+  if (absDx > absDy) {
+    // 左右差距大：连接左上标注的底部水平中心点，和右下标注的左侧垂直中心点
+    return {
+      startPos: endPoints.bottomCenter,
+      endPos: startPoints.leftCenter,
+      startDirection: ConnectionDirection.TOP_TO_BOTTOM_VERTICAL,
+      endDirection: ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL
+    }
+  } else {
+    // 上下差距大：连接左上标注的右侧垂直中心点，和右下标注的顶部水平中心点
+    return {
+      startPos: endPoints.rightCenter,
+      endPos: startPoints.topCenter,
+      startDirection: ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL,
+      endDirection: ConnectionDirection.BOTTOM_TO_TOP_VERTICAL
+    }
+  }
+}
+
+/**
+ * 根据起点/终点元素的相对位置，计算更符合直觉的连接锚点：
+ * - 左右排列：左侧标注的右边中间 -> 右侧标注的左边中间
+ * - 上下排列：上侧标注的底部中间 -> 下侧标注的顶部中间
+ * @deprecated 使用 calculateAnnotationToAnnotationConnection 代替
+ */
+export function getConnectionPointsBetweenElements(
+  startElement: HTMLElement,
+  endElement: HTMLElement,
+  virtualListLayer: HTMLElement
+): { startPos: { x: number; y: number }; endPos: { x: number; y: number } } {
+  const result = calculateAnnotationToAnnotationConnection(startElement, endElement, virtualListLayer)
+  return {
+    startPos: result.startPos,
+    endPos: result.endPos
+  }
 }
 
 export function updateGroupedAnnotations(lines: Array<{ id: number }>, annotations: AnnotationItem[]): GroupedAnnotation[] {
