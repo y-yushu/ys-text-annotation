@@ -49,7 +49,7 @@ import {
   type LayerDisplayModeType
 } from './types'
 
-// TODO 右侧抽屉增加具体连接
+// TODO 鼠标移入控制path的层级
 
 @customElement('ys-text-annotation')
 export class YsTextAnnotation extends LitElement {
@@ -1586,7 +1586,7 @@ export class YsTextAnnotation extends LitElement {
   /**
    * 渲染行内容，如果有标注则高亮显示
    */
-  private renderLineContent(line: LineItem): string | ReturnType<typeof html> {
+  private _renderLineContent(line: LineItem): string | ReturnType<typeof html> {
     // 只在创建标注模式（新增）时显示选中文本的高亮，编辑模式不显示（通过 editingAnnotationId 判断）
     const isEditingThisLine = !!(
       this.functionMode === FunctionMode.CREATING_ANNOTATION &&
@@ -1835,6 +1835,51 @@ export class YsTextAnnotation extends LitElement {
     this.closeAnnotationList()
   }
 
+  /**
+   * 获取标注在虚拟列表中的相关关系
+   * 只返回另一端标注在虚拟列表渲染范围内的关系
+   * @param annotationId 标注ID
+   * @returns 关系数组，每项包含关系和对应的标注
+   */
+  private getVisibleRelationships(
+    annotationId: string
+  ): Array<{ relationship: RelationshipItem; relatedAnnotation: AnnotationItem; direction: 'start' | 'end' }> {
+    const result: Array<{ relationship: RelationshipItem; relatedAnnotation: AnnotationItem; direction: 'start' | 'end' }> = []
+
+    // 遍历所有关系
+    for (const relationship of this.relationships) {
+      let relatedAnnotationId: string | null = null
+      let direction: 'start' | 'end' | null = null
+
+      // 判断当前标注在关系中的位置
+      if (relationship.startId === annotationId) {
+        relatedAnnotationId = relationship.endId
+        direction = 'end' // 当前标注是起点，关联标注是终点
+      } else if (relationship.endId === annotationId) {
+        relatedAnnotationId = relationship.startId
+        direction = 'start' // 当前标注是终点，关联标注是起点
+      }
+
+      // 如果当前标注不在这个关系中，跳过
+      if (!relatedAnnotationId || !direction) continue
+
+      // 查找关联的标注
+      const relatedAnnotation = this.annotations.find(ann => ann.id === relatedAnnotationId)
+      if (!relatedAnnotation) continue
+
+      // 检查关联标注是否在当前虚拟列表渲染范围内
+      if (relatedAnnotation.lineId >= this.visibleStartIndex && relatedAnnotation.lineId <= this.visibleEndIndex) {
+        result.push({
+          relationship,
+          relatedAnnotation,
+          direction
+        })
+      }
+    }
+
+    return result
+  }
+
   render() {
     const visibleLines = this.lines.slice(this.visibleStartIndex, this.visibleEndIndex + 1)
     const totalHeight = getTotalHeight(this.lines.length, this.lineHeight)
@@ -1954,7 +1999,7 @@ export class YsTextAnnotation extends LitElement {
                 line => html`
                   <div class="line">
                     ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
-                    <span class="line-content">${this.renderLineContent(line)}</span>
+                    <span class="line-content">${this._renderLineContent(line)}</span>
                   </div>
                 `
               )}
@@ -1988,24 +2033,60 @@ export class YsTextAnnotation extends LitElement {
                   <div class="annotation-list-content">
                     ${this.selectedGroup.annotations
                       .sort((a, b) => a.lineId - b.lineId)
-                      .map(
-                        annotation => html`
-                          <div
-                            class="annotation-list-item"
-                            @click=${() => this.jumpToAnnotation(annotation)}
-                            title="点击跳转到行号 ${annotation.lineId + 1}"
-                          >
-                            <div class="annotation-list-item-line">
-                              <span class="annotation-list-line-number">${annotation.lineId + 1}</span>
-                              <span class="annotation-list-type" style="background-color: ${getAnnotationColor(annotation, this.annotationType)};"
-                                >${annotation.type}</span
-                              >
+                      .map(annotation => {
+                        // 获取该标注在虚拟列表中的相关关系
+                        const visibleRelations = this.getVisibleRelationships(annotation.id)
+
+                        return html`
+                          <div class="annotation-list-item-wrapper">
+                            <div
+                              class="annotation-list-item"
+                              @click=${() => this.jumpToAnnotation(annotation)}
+                              title="点击跳转到行号 ${annotation.lineId + 1}"
+                            >
+                              <div class="annotation-list-item-line">
+                                <span class="annotation-list-line-number">${annotation.lineId + 1}</span>
+                                <span class="annotation-list-type" style="background-color: ${getAnnotationColor(annotation, this.annotationType)};"
+                                  >${annotation.type}</span
+                                >
+                              </div>
+                              <div class="annotation-list-item-content">${annotation.content}</div>
+                              ${annotation.description ? html`<div class="annotation-list-item-desc">${annotation.description}</div>` : null}
                             </div>
-                            <div class="annotation-list-item-content">${annotation.content}</div>
-                            ${annotation.description ? html`<div class="annotation-list-item-desc">${annotation.description}</div>` : null}
+
+                            ${visibleRelations.length > 0
+                              ? html`
+                                  <div class="annotation-list-relations">
+                                    ${visibleRelations.map(
+                                      ({ relationship, relatedAnnotation, direction }) => html`
+                                        <div class="annotation-list-relation-item">
+                                          <div class="annotation-list-relation-arrow" style="color: ${relationship.color || '#c12c1f'};">
+                                            ${direction === 'end' ? '→' : '←'}
+                                          </div>
+                                          <div class="annotation-list-relation-info">
+                                            ${relationship.type
+                                              ? html`<span class="annotation-list-relation-type" style="color: ${relationship.color || '#c12c1f'};"
+                                                  >${relationship.type}</span
+                                                >`
+                                              : null}
+                                            <div class="annotation-list-relation-target">
+                                              <span class="annotation-list-relation-line-number">${relatedAnnotation.lineId + 1}</span>
+                                              <span
+                                                class="annotation-list-relation-content"
+                                                style="border-left-color: ${getAnnotationColor(relatedAnnotation, this.annotationType)};"
+                                                >${relatedAnnotation.content}</span
+                                              >
+                                            </div>
+                                          </div>
+                                        </div>
+                                      `
+                                    )}
+                                  </div>
+                                `
+                              : null}
                           </div>
                         `
-                      )}
+                      })}
                   </div>
                 </div>
               `
