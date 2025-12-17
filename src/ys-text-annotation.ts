@@ -49,6 +49,8 @@ import {
   type LayerDisplayModeType
 } from './types'
 
+// TODO 右侧抽屉增加具体连接
+
 @customElement('ys-text-annotation')
 export class YsTextAnnotation extends LitElement {
   static styles = css`
@@ -194,6 +196,14 @@ export class YsTextAnnotation extends LitElement {
 
   @state()
   private hoveredAnnotationId: string | null = null
+
+  // ==================== 远程标注连接相关状态 ====================
+
+  /**
+   * 远程标注ID（用于记录第一个标注，等待连接第二个标注）
+   */
+  @state()
+  private remoteAnnotationId: string | null = null
 
   // ==================== 计算属性 ====================
 
@@ -1177,6 +1187,82 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
+   * 处理创建远程标注操作（记录第一个标注ID）
+   */
+  private handleCreateRemoteAnnotation() {
+    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation') {
+      return
+    }
+
+    // 如果 editingEnabled 为 false，不允许切换模式
+    if (!this.editingEnabled) {
+      return
+    }
+
+    // 记录远程标注ID（去掉 'anno-' 前缀）
+    const annotationId = this.contextMenuTarget.id.replace(/^anno-/, '')
+    this.remoteAnnotationId = annotationId
+
+    // 关闭右键菜单，重置到默认模式
+    this.resetToDefaultMode()
+  }
+
+  /**
+   * 处理取消记录远程标注操作
+   */
+  private handleCancelRemoteAnnotation() {
+    // 清除远程标注ID
+    this.remoteAnnotationId = null
+
+    // 关闭右键菜单，重置到默认模式
+    this.resetToDefaultMode()
+  }
+
+  /**
+   * 处理连接远程标注操作（连接到之前记录的标注）
+   */
+  private handleConnectRemoteAnnotation() {
+    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation' || !this.remoteAnnotationId) {
+      return
+    }
+
+    // 如果 editingEnabled 为 false，不允许切换模式
+    if (!this.editingEnabled) {
+      return
+    }
+
+    // 获取当前标注ID（去掉 'anno-' 前缀）
+    const currentAnnotationId = this.contextMenuTarget.id.replace(/^anno-/, '')
+
+    // 确保不是连接到自己
+    if (currentAnnotationId === this.remoteAnnotationId) {
+      // 重置远程标注ID
+      this.remoteAnnotationId = null
+      this.resetToDefaultMode()
+      return
+    }
+
+    // 创建关系
+    const defaultRelationshipType = this.relationshipType[0]
+    const newRelationship: RelationshipItem = {
+      id: `rel-${Date.now()}`,
+      startId: this.remoteAnnotationId,
+      endId: currentAnnotationId,
+      type: defaultRelationshipType?.type || '',
+      description: '',
+      color: defaultRelationshipType?.color || '#c12c1f'
+    }
+
+    this.relationships = [...this.relationships, newRelationship]
+
+    // 清除远程标注ID
+    this.remoteAnnotationId = null
+
+    // 重置到默认模式
+    this.resetToDefaultMode()
+  }
+
+  /**
    * 处理编辑标注操作
    */
   private handleEditAnnotation() {
@@ -1963,22 +2049,48 @@ export class YsTextAnnotation extends LitElement {
 
         <!-- 右键菜单层 -->
         ${this.contextMenuVisible
-          ? html`<div
-              class="context-menu"
-              style="left: ${this.contextMenuPosition.x}px; top: ${this.contextMenuPosition.y}px;"
-              @click=${(e: MouseEvent) => e.stopPropagation()}
-            >
-              ${this.contextMenuTarget?.type === 'annotation'
-                ? html`
-                    <button class="context-menu-item create-relationship" @click=${this.handleCreateRelationship}>创建关系</button>
-                    <button class="context-menu-item edit-annotation" @click=${this.handleEditAnnotation}>编辑标注</button>
-                  `
-                : null}
-              ${this.contextMenuTarget?.type === 'relationship'
-                ? html`<button class="context-menu-item edit-relationship" @click=${this.handleEditRelationship}>编辑关系</button>`
-                : null}
-              <button class="context-menu-item delete" @click=${this.handleDelete}>删除</button>
-            </div>`
+          ? (() => {
+              // 获取当前右键的标注信息（用于显示按钮文本）
+              let currentAnnotation: AnnotationItem | undefined
+              let remoteAnnotation: AnnotationItem | undefined
+              let isCurrentRemote = false
+
+              if (this.contextMenuTarget?.type === 'annotation') {
+                const currentId = this.contextMenuTarget.id.replace(/^anno-/, '')
+                currentAnnotation = this.annotations.find(ann => ann.id === currentId)
+
+                if (this.remoteAnnotationId) {
+                  remoteAnnotation = this.annotations.find(ann => ann.id === this.remoteAnnotationId)
+                  isCurrentRemote = currentId === this.remoteAnnotationId
+                }
+              }
+
+              return html`<div
+                class="context-menu"
+                style="left: ${this.contextMenuPosition.x}px; top: ${this.contextMenuPosition.y}px;"
+                @click=${(e: MouseEvent) => e.stopPropagation()}
+              >
+                ${this.contextMenuTarget?.type === 'annotation'
+                  ? html`
+                      <button class="context-menu-item create-relationship" @click=${this.handleCreateRelationship}>创建关系</button>
+                      ${!this.remoteAnnotationId
+                        ? html`<button class="context-menu-item create-remote-annotation" @click=${this.handleCreateRemoteAnnotation}>
+                            记录<span style="color: ${currentAnnotation?.color || '#2d0bdf'}">${currentAnnotation?.content || '标注'}</span>
+                          </button>`
+                        : isCurrentRemote
+                          ? html`<button class="context-menu-item cancel-remote-annotation" @click=${this.handleCancelRemoteAnnotation}>取消记录</button>`
+                          : html`<button class="context-menu-item connect-remote-annotation" @click=${this.handleConnectRemoteAnnotation}>
+                              连接<span style="color: ${remoteAnnotation?.color || '#2d0bdf'}">${remoteAnnotation?.content || '标注'}</span>
+                            </button>`}
+                      <button class="context-menu-item edit-annotation" @click=${this.handleEditAnnotation}>编辑标注</button>
+                    `
+                  : null}
+                ${this.contextMenuTarget?.type === 'relationship'
+                  ? html`<button class="context-menu-item edit-relationship" @click=${this.handleEditRelationship}>编辑关系</button>`
+                  : null}
+                <button class="context-menu-item delete" @click=${this.handleDelete}>删除</button>
+              </div>`
+            })()
           : null}
       </div>
     `
