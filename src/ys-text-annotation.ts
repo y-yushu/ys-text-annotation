@@ -49,8 +49,6 @@ import {
   type LayerDisplayModeType
 } from './types'
 
-// TODO 鼠标移入控制path的层级
-
 @customElement('ys-text-annotation')
 export class YsTextAnnotation extends LitElement {
   static styles = css`
@@ -1254,6 +1252,7 @@ export class YsTextAnnotation extends LitElement {
     }
 
     this.relationships = [...this.relationships, newRelationship]
+    console.log('🚀 ~ YsTextAnnotation ~ handleConnectRemoteAnnotation ~ newRelationship:', newRelationship)
 
     // 清除远程标注ID
     this.remoteAnnotationId = null
@@ -1531,6 +1530,7 @@ export class YsTextAnnotation extends LitElement {
     }
 
     this.relationships = [...this.relationships, newRelationship]
+    console.log('🚀 ~ YsTextAnnotation ~ completeRelationshipCreation ~ newRelationship:', newRelationship)
     // 重置到默认模式
     this.resetToDefaultMode()
   }
