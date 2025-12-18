@@ -320,6 +320,10 @@
   pointer-events: none;
 }
 
+.virtual-list-content {
+  will-change: transform;
+}
+
 .virtual-list-layer .line {
   pointer-events: auto;
   position: relative;

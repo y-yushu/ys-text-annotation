@@ -2,6 +2,8 @@ import { LitElement, css, html, svg, unsafeCSS } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { mockContent } from './mock'
 import styles from './index.css?inline'
+import VirtualCore from './VirtualCore'
+import type { HeightUpdate } from './VirtualCore'
 import {
   getShadowDOMSelection,
   calculateEditLayerPosition,
@@ -20,10 +22,7 @@ import {
   getElementCenterPosition,
   findAnnotationElement,
   getGroupTooltip,
-  getTotalHeight,
   getBottomPadding,
-  getOffsetTop,
-  updateVisibleRange,
   updateGroupedAnnotations,
   getGroupColor,
   getAnnotationColor
@@ -48,6 +47,8 @@ import {
   type FunctionModeType,
   type LayerDisplayModeType
 } from './types'
+
+// FIXME aside滚动还是有问题
 
 @customElement('ys-text-annotation')
 export class YsTextAnnotation extends LitElement {
@@ -82,6 +83,25 @@ export class YsTextAnnotation extends LitElement {
 
   @state()
   private containerHeight = 0
+
+  // ==================== 虚拟列表核心 ====================
+
+  /**
+   * VirtualCore 实例，用于不定高虚拟列表计算
+   */
+  private virtualCore?: VirtualCore
+
+  /**
+   * VirtualCore 返回的 offset，用于定位 virtual-list-content
+   */
+  @state()
+  private virtualListOffset = 0
+
+  /**
+   * VirtualCore 计算的总高度
+   */
+  @state()
+  private virtualTotalHeight = 0
 
   @state()
   private annotationType: AnnotationType[] = defaultAnnotationTypes
@@ -324,6 +344,14 @@ export class YsTextAnnotation extends LitElement {
     ) {
       this.scheduleMeasureRelationships()
     }
+
+    // 当可见范围变化时，测量并更新高度（不定高虚拟列表核心逻辑）
+    if (changedProperties.has('visibleStartIndex') || changedProperties.has('visibleEndIndex')) {
+      // 使用 requestAnimationFrame 确保 DOM 已渲染
+      requestAnimationFrame(() => {
+        this.measureAndUpdateHeights()
+      })
+    }
   }
 
   firstUpdated() {
@@ -336,6 +364,9 @@ export class YsTextAnnotation extends LitElement {
     if (clientHeight > 0 && clientHeight !== this.containerHeight) {
       this.containerHeight = clientHeight
     }
+
+    // 初始化 VirtualCore
+    this.initVirtualCore()
 
     // 监听文本选择事件（只处理左键）
     this.scrollContainer.addEventListener('mousedown', (e: MouseEvent) => {
@@ -471,6 +502,12 @@ export class YsTextAnnotation extends LitElement {
       id: index,
       content: content
     }))
+
+    // 同步 VirtualCore 的总数
+    if (this.virtualCore) {
+      this.virtualCore.setTotal(this.lines.length)
+    }
+
     if (this.scrollContainer) {
       this.measureLineHeight()
       this.updateVisibleRange()
@@ -480,6 +517,64 @@ export class YsTextAnnotation extends LitElement {
   private measureLineHeight() {
     if (!this.scrollContainer) return
     this.lineHeight = measureLineHeight(this.scrollContainer)
+  }
+
+  /**
+   * 初始化 VirtualCore 实例
+   */
+  private initVirtualCore() {
+    if (this.virtualCore) return
+
+    this.virtualCore = new VirtualCore({
+      total: this.lines.length,
+      defaultHeight: this.lineHeight,
+      buffer: 5,
+      onTotalHeightChange: (totalHeight: number) => {
+        this.virtualTotalHeight = totalHeight
+      }
+    })
+
+    // 初始化后立即获取总高度
+    this.virtualTotalHeight = this.virtualCore.getTotalHeight()
+  }
+
+  /**
+   * 测量可见行的实际高度并更新到 VirtualCore
+   * 这是不定高虚拟列表的核心方法
+   */
+  private measureAndUpdateHeights() {
+    if (!this.virtualCore || !this.scrollContainer) return
+
+    // 查询 virtual-list-content 内的 line 元素
+    const virtualListContent = this.shadowRoot?.querySelector('.virtual-list-content') as HTMLElement
+    if (!virtualListContent) return
+
+    const lineElements = virtualListContent.querySelectorAll('.line')
+    const updates: HeightUpdate[] = []
+
+    lineElements.forEach((el, i) => {
+      const actualIndex = this.visibleStartIndex + i
+      const actualHeight = (el as HTMLElement).offsetHeight
+
+      // 只有当高度与预期不同时才更新
+      const currentPosition = this.virtualCore!.getItemPosition(actualIndex)
+      if (currentPosition && currentPosition.height !== actualHeight) {
+        updates.push({ index: actualIndex, height: actualHeight })
+      }
+    })
+
+    if (updates.length > 0) {
+      const currentScrollTop = this.scrollContainer.scrollTop
+      const { scrollCorrection } = this.virtualCore.updateHeights(updates, currentScrollTop)
+
+      // 应用滚动修正，防止内容跳动
+      if (scrollCorrection !== 0) {
+        this.scrollContainer.scrollTop = currentScrollTop + scrollCorrection
+      }
+
+      // 高度更新后，重新计算可见范围
+      this.updateVisibleRange()
+    }
   }
 
   private handleScroll() {
@@ -506,16 +601,16 @@ export class YsTextAnnotation extends LitElement {
       this.containerHeight = clientHeight
     }
 
-    const result = updateVisibleRange({
-      scrollContainer: this.scrollContainer,
-      lines: this.lines,
-      lineHeight: this.lineHeight,
-      containerHeight: this.containerHeight
-    })
+    // 使用 VirtualCore 计算可见范围
+    if (this.virtualCore) {
+      const scrollTop = this.scrollContainer.scrollTop
+      const viewHeight = this.scrollContainer.clientHeight
 
-    if (result) {
-      this.visibleStartIndex = result.visibleStartIndex
-      this.visibleEndIndex = result.visibleEndIndex
+      const range = this.virtualCore.getRenderRange(scrollTop, viewHeight)
+
+      this.visibleStartIndex = range.startIndex
+      this.visibleEndIndex = range.endIndex
+      this.virtualListOffset = range.offset
     }
   }
 
@@ -556,11 +651,12 @@ export class YsTextAnnotation extends LitElement {
     if (!this.scrollContainer) return
 
     const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
+    const virtualListContent = this.shadowRoot?.querySelector('.virtual-list-content') as HTMLElement
     const asideContainer = this.shadowRoot?.querySelector('.aside-container') as HTMLElement
 
-    // 获取 virtual-list-layer 的实际高度，用于同步 SVG 层高度
-    if (virtualListLayer) {
-      const actualHeight = virtualListLayer.offsetHeight
+    // 获取 virtual-list-content 的实际高度，用于同步 SVG 层高度
+    if (virtualListContent) {
+      const actualHeight = virtualListContent.offsetHeight
       if (actualHeight > 0 && actualHeight !== this.visibleLayerHeight) {
         this.visibleLayerHeight = actualHeight
       }
@@ -1818,21 +1914,31 @@ export class YsTextAnnotation extends LitElement {
 
   /**
    * 跳转到指定标注的位置
+   * 使用 VirtualCore.scrollToIndex 进行迭代收敛式精确跳转
    * @param annotation 标注项
    */
   private jumpToAnnotation(annotation: AnnotationItem) {
-    if (!this.scrollContainer) return
+    if (!this.scrollContainer || !this.virtualCore) return
 
     const targetLineId = annotation.lineId
-    const targetOffsetTop = getOffsetTop(targetLineId, this.lineHeight)
 
-    this.scrollContainer.scrollTo({
-      top: Math.max(0, targetOffsetTop),
-      behavior: 'smooth'
+    // 使用 VirtualCore 的迭代收敛式跳转
+    this.virtualCore.scrollToIndex(targetLineId, {
+      onScroll: (targetTop: number) => {
+        this.scrollContainer!.scrollTo({
+          top: Math.max(0, targetTop),
+          behavior: 'smooth'
+        })
+      },
+      onComplete: () => {
+        // 跳转完成后关闭列表
+        this.closeAnnotationList()
+      },
+      onAbort: () => {
+        // 即使跳转被中断，也关闭列表
+        this.closeAnnotationList()
+      }
     })
-
-    // 跳转后关闭列表
-    this.closeAnnotationList()
   }
 
   /**
@@ -1882,9 +1988,11 @@ export class YsTextAnnotation extends LitElement {
 
   render() {
     const visibleLines = this.lines.slice(this.visibleStartIndex, this.visibleEndIndex + 1)
-    const totalHeight = getTotalHeight(this.lines.length, this.lineHeight)
+    // 使用 VirtualCore 计算的总高度，回退到预估高度
+    const totalHeight = this.virtualTotalHeight || this.lines.length * this.lineHeight
     const bottomPadding = getBottomPadding(this.containerHeight)
-    const offsetTop = getOffsetTop(this.visibleStartIndex, this.lineHeight)
+    // 使用 VirtualCore 返回的 offset
+    const offsetTop = this.virtualListOffset
     // 使用实际测量的 virtual-list-layer 高度，初始渲染时使用计算值作为回退
     const visibleHeight = this.visibleLayerHeight > 0 ? this.visibleLayerHeight : visibleLines.length * this.lineHeight
 
@@ -1991,18 +2099,18 @@ export class YsTextAnnotation extends LitElement {
             </svg>
 
             <!-- 虚拟列表层 （标注节点层） -->
-            <div
-              class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}"
-              style="transform: translateY(${offsetTop}px); padding-bottom: ${bottomPadding}px;"
-            >
-              ${visibleLines.map(
-                line => html`
-                  <div class="line">
-                    ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
-                    <span class="line-content">${this._renderLineContent(line)}</span>
-                  </div>
-                `
-              )}
+            <div class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}">
+              <!-- 内层包裹，应用 VirtualCore 返回的 offset 偏移 -->
+              <div class="virtual-list-content" style="transform: translateY(${offsetTop}px); padding-bottom: ${bottomPadding}px;">
+                ${visibleLines.map(
+                  line => html`
+                    <div class="line">
+                      ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
+                      <span class="line-content">${this._renderLineContent(line)}</span>
+                    </div>
+                  `
+                )}
+              </div>
             </div>
           </div>
         </div>
