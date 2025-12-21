@@ -636,7 +636,7 @@ export class YsTextAnnotation extends LitElement {
     const markers = asideContainer.querySelectorAll('.annotation-marker')
     for (const marker of Array.from(markers) as HTMLElement[]) {
       // 获取标记的style.top值（百分比）
-      const markerStyle = window.getComputedStyle(marker)
+      const markerStyle = getComputedStyle(marker)
       const markerTopPercent = parseFloat(markerStyle.top)
 
       // 如果标记的位置百分比接近目标位置百分比（容差0.1%）
@@ -1107,7 +1107,7 @@ export class YsTextAnnotation extends LitElement {
       selection.removeAllRanges()
     } else {
       // 回退到全局选择清除（如果 Shadow DOM 选择不可用）
-      window.getSelection()?.removeAllRanges()
+      getSelection()?.removeAllRanges()
     }
 
     // 隐藏编辑图层
@@ -1859,8 +1859,8 @@ export class YsTextAnnotation extends LitElement {
     let popupY = markerCenterY
 
     // 确保弹窗在可视区域内
-    const viewportHeight = window.innerHeight
-    const viewportWidth = window.innerWidth
+    const viewportHeight = globalThis.innerHeight ?? 0
+    const viewportWidth = globalThis.innerWidth ?? 0
 
     // 计算弹窗在屏幕上的实际位置
     const popupScreenTop = containerRect.top + popupY - popupMaxHeight / 2
@@ -1973,14 +1973,14 @@ export class YsTextAnnotation extends LitElement {
 
       const handleScroll = () => {
         if (scrollTimer === null) {
-          scrollTimer = window.setInterval(checkScroll, CHECK_INTERVAL)
+          scrollTimer = setInterval(checkScroll, CHECK_INTERVAL)
         }
       }
 
       _container.addEventListener('scroll', handleScroll, { passive: true })
 
       // 立即开始检查
-      scrollTimer = window.setInterval(checkScroll, CHECK_INTERVAL)
+      scrollTimer = setInterval(checkScroll, CHECK_INTERVAL)
 
       // 设置超时保护（最多等待3秒）
       setTimeout(() => {

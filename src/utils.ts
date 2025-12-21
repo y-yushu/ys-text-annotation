@@ -5,7 +5,7 @@ import { VIRTUAL_LIST_CONFIG } from './types'
 /**
  * 获取 Shadow DOM 内的选择
  * 优先使用 shadowRoot.getSelection()（Chromium 浏览器支持）
- * 如果不支持，回退到 window.getSelection() 并检查是否在 Shadow DOM 内
+ * 如果不支持，回退到 globalThis.getSelection() 并检查是否在 Shadow DOM 内
  */
 export function getShadowDOMSelection(shadowRoot: ShadowRoot | null): Selection | null {
   // 优先尝试使用 shadowRoot.getSelection()（Chromium 浏览器支持）
@@ -16,8 +16,8 @@ export function getShadowDOMSelection(shadowRoot: ShadowRoot | null): Selection 
     }
   }
 
-  // 回退到 window.getSelection()，但需要检查是否在 Shadow DOM 内
-  const selection = window.getSelection()
+  // 回退到 globalThis.getSelection()，但需要检查是否在 Shadow DOM 内
+  const selection = globalThis.getSelection()
   if (selection && selection.rangeCount > 0) {
     const range = selection.getRangeAt(0)
     const startRoot = range.startContainer.getRootNode()
@@ -578,7 +578,7 @@ export function measureLineHeight(container: HTMLElement): number {
   container.appendChild(tempDiv)
 
   // 使用 document.defaultView 或直接使用 getComputedStyle（更安全）
-  const computedStyle = (document.defaultView || window).getComputedStyle(tempDiv)
+  const computedStyle = (document.defaultView || globalThis).getComputedStyle(tempDiv)
   const { lineHeight: lineHeightValue, fontSize } = computedStyle
   const fontSizeNum = parseFloat(fontSize)
 
