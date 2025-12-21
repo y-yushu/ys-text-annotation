@@ -2184,9 +2184,9 @@ export class YsTextAnnotation extends LitElement {
             </svg>
 
             <!-- 虚拟列表层 （标注节点层） -->
-            <div class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}">
+            <div class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}" style="transform: translateY(${offsetTop}px)">
               <!-- 内层包裹，应用 VirtualCore 返回的 offset 偏移 -->
-              <div class="virtual-list-content" style="transform: translateY(${offsetTop}px); padding-bottom: ${bottomPadding}px;">
+              <div class="virtual-list-content" style="padding-bottom: ${bottomPadding}px">
                 ${visibleLines.map(
                   line => html`
                     <div class="line">
