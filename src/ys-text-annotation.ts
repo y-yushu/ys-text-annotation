@@ -1348,7 +1348,6 @@ export class YsTextAnnotation extends LitElement {
     }
 
     this.relationships = [...this.relationships, newRelationship]
-    console.log('🚀 ~ YsTextAnnotation ~ handleConnectRemoteAnnotation ~ newRelationship:', newRelationship)
 
     // 清除远程标注ID
     this.remoteAnnotationId = null
@@ -1626,7 +1625,6 @@ export class YsTextAnnotation extends LitElement {
     }
 
     this.relationships = [...this.relationships, newRelationship]
-    console.log('🚀 ~ YsTextAnnotation ~ completeRelationshipCreation ~ newRelationship:', newRelationship)
     // 重置到默认模式
     this.resetToDefaultMode()
   }
@@ -1913,6 +1911,90 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
+   * 等待滚动动画完成
+   * @param container 滚动容器
+   * @param targetTop 目标滚动位置
+   * @returns Promise，在滚动完成时 resolve
+   */
+  private waitForScrollComplete(container: HTMLElement, targetTop: number): Promise<void> {
+    return new Promise<void>(resolve => {
+      // 如果浏览器支持 scrollend 事件，使用它（更准确）
+      if ('onscrollend' in container) {
+        const handleScrollEnd = () => {
+          container.removeEventListener('scrollend', handleScrollEnd)
+          resolve()
+        }
+        container.addEventListener('scrollend', handleScrollEnd, { once: true })
+        return
+      }
+
+      const _container = container as HTMLElement
+
+      // 回退方案：通过监听 scroll 事件检测滚动是否停止
+      let scrollTimer: number | null = null
+      let lastScrollTop = _container.scrollTop
+      let stableCount = 0
+      const STABLE_THRESHOLD = 2 // 连续2次检查位置不变认为滚动完成
+      const CHECK_INTERVAL = 50 // 每50ms检查一次
+
+      const checkScroll = () => {
+        const currentScrollTop = _container.scrollTop
+        const distance = Math.abs(currentScrollTop - targetTop)
+
+        // 如果已经到达目标位置（容差5px），或者位置稳定
+        if (distance < 5) {
+          if (scrollTimer !== null) {
+            clearInterval(scrollTimer)
+            scrollTimer = null
+          }
+          _container.removeEventListener('scroll', handleScroll)
+          resolve()
+          return
+        }
+
+        // 检查位置是否稳定
+        if (Math.abs(currentScrollTop - lastScrollTop) < 1) {
+          stableCount++
+          if (stableCount >= STABLE_THRESHOLD) {
+            if (scrollTimer !== null) {
+              clearInterval(scrollTimer)
+              scrollTimer = null
+            }
+            _container.removeEventListener('scroll', handleScroll)
+            resolve()
+            return
+          }
+        } else {
+          stableCount = 0
+        }
+
+        lastScrollTop = currentScrollTop
+      }
+
+      const handleScroll = () => {
+        if (scrollTimer === null) {
+          scrollTimer = window.setInterval(checkScroll, CHECK_INTERVAL)
+        }
+      }
+
+      _container.addEventListener('scroll', handleScroll, { passive: true })
+
+      // 立即开始检查
+      scrollTimer = window.setInterval(checkScroll, CHECK_INTERVAL)
+
+      // 设置超时保护（最多等待3秒）
+      setTimeout(() => {
+        if (scrollTimer !== null) {
+          clearInterval(scrollTimer)
+          scrollTimer = null
+        }
+        _container.removeEventListener('scroll', handleScroll)
+        resolve()
+      }, 3000)
+    })
+  }
+
+  /**
    * 跳转到指定标注的位置
    * 使用 VirtualCore.scrollToIndex 进行迭代收敛式精确跳转
    * @param annotation 标注项
@@ -1925,10 +2007,13 @@ export class YsTextAnnotation extends LitElement {
     // 使用 VirtualCore 的迭代收敛式跳转
     this.virtualCore.scrollToIndex(targetLineId, {
       onScroll: (targetTop: number) => {
+        const finalTop = Math.max(0, targetTop)
         this.scrollContainer!.scrollTo({
-          top: Math.max(0, targetTop),
+          top: finalTop,
           behavior: 'smooth'
         })
+        // 返回 Promise，等待滚动动画完成
+        return this.waitForScrollComplete(this.scrollContainer!, finalTop)
       },
       onComplete: () => {
         // 跳转完成后关闭列表
@@ -2149,8 +2234,8 @@ export class YsTextAnnotation extends LitElement {
                           <div class="annotation-list-item-wrapper">
                             <div
                               class="annotation-list-item"
-                              @click=${() => this.jumpToAnnotation(annotation)}
                               title="点击跳转到行号 ${annotation.lineId + 1}"
+                              @click=${() => this.jumpToAnnotation(annotation)}
                             >
                               <div class="annotation-list-item-line">
                                 <span class="annotation-list-line-number">${annotation.lineId + 1}</span>
