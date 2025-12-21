@@ -157,6 +157,28 @@ export class YsTextAnnotation extends LitElement {
   @state()
   private functionMode: FunctionModeType = FunctionMode.DEFAULT
 
+  // 重置 -- 返回默认状态（清理所有功能相关状态）
+  private resetToDefaultMode() {
+    // 清理编辑层相关状态
+    this.selectedTextInfo = null
+    this.savedRange = null
+    this.editInputValue = ''
+    this.selectedAnnotationType = ''
+    this.selectedRelationshipType = ''
+    this.justSelectedText = false
+    this.editingAnnotationId = null
+    this.editingRelationshipId = null
+
+    // 清理右键菜单相关状态
+    this.contextMenuTarget = null
+
+    // 清理关系创建相关状态和事件监听
+    this.cancelRelationshipCreation()
+
+    // 重置功能模式到默认
+    this.functionMode = FunctionMode.DEFAULT
+  }
+
   /**
    * 是否正在悬停高亮元素（标注或关系）
    */
@@ -180,35 +202,9 @@ export class YsTextAnnotation extends LitElement {
   @state()
   private editLayerPosition = { x: 0, y: 0 }
 
-  @state()
-  private editInputValue = ''
-
-  @state()
-  private selectedAnnotationType: string = ''
-
   private selectedTextInfo: SelectedTextInfo | null = null
 
   private savedRange: Range | null = null
-
-  /**
-   * 正在编辑的标注ID（编辑模式时使用）
-   */
-  private editingAnnotationId: string | null = null
-
-  /**
-   * 正在编辑的关系ID（编辑关系时使用）
-   */
-  private editingRelationshipId: string | null = null
-
-  @state()
-  private selectedRelationshipType: string = ''
-
-  // ==================== 右键菜单相关状态 ====================
-
-  @state()
-  private contextMenuPosition = { x: 0, y: 0 }
-
-  private contextMenuTarget: ContextMenuTarget | null = null
 
   // ==================== 关系创建相关状态 ====================
 
@@ -220,14 +216,6 @@ export class YsTextAnnotation extends LitElement {
 
   @state()
   private hoveredAnnotationId: string | null = null
-
-  // ==================== 远程标注连接相关状态 ====================
-
-  /**
-   * 远程标注ID（用于记录第一个标注，等待连接第二个标注）
-   */
-  @state()
-  private remoteAnnotationId: string | null = null
 
   // ==================== 计算属性 ====================
 
@@ -244,27 +232,6 @@ export class YsTextAnnotation extends LitElement {
       return LayerDisplayMode.HIGHLIGHT_RELATIONSHIP
     }
     return LayerDisplayMode.HIGHLIGHT_VIRTUAL_LIST
-  }
-
-  /**
-   * 便捷计算属性：编辑层是否可见
-   */
-  private get editLayerVisible(): boolean {
-    return this.functionMode === FunctionMode.CREATING_ANNOTATION
-  }
-
-  /**
-   * 便捷计算属性：是否正在编辑关系
-   */
-  private get isEditingRelationship(): boolean {
-    return !!this.editingRelationshipId
-  }
-
-  /**
-   * 便捷计算属性：右键菜单是否可见
-   */
-  private get contextMenuVisible(): boolean {
-    return this.functionMode === FunctionMode.CONTEXT_MENU_OPEN
   }
 
   /**
@@ -1068,157 +1035,6 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
-   * 处理确认按钮点击
-   */
-  private handleConfirmEdit() {
-    // 判断是编辑关系还是编辑/创建标注
-    if (this.isEditingRelationship && this.editingRelationshipId) {
-      // 编辑关系
-      const relationship = this.relationships.find(rel => rel.id === this.editingRelationshipId)
-      if (relationship) {
-        // 查找选中的关系类型对应的颜色
-        const selectedTypeObj = this.relationshipType.find(type => type.type === this.selectedRelationshipType)
-        const typeColor = selectedTypeObj?.color || relationship.color || '#c12c1f'
-
-        const updatedRelationship: RelationshipItem = {
-          ...relationship,
-          type: this.selectedRelationshipType,
-          description: this.editInputValue.trim(),
-          color: typeColor
-        }
-
-        this.relationships = this.relationships.map(rel => (rel.id === updatedRelationship.id ? updatedRelationship : rel))
-      }
-      this.resetToDefaultMode()
-      return
-    }
-
-    // 处理标注的创建/编辑
-    // 验证下拉选择框是否已选择（必填）
-    if (!this.selectedAnnotationType || !this.selectedTextInfo) {
-      return
-    }
-
-    // 查找选中的类型对应的颜色
-    const selectedTypeObj = this.annotationType.find(type => type.type === this.selectedAnnotationType)
-    const typeColor = selectedTypeObj?.color || '#2d0bdf'
-
-    const trimmedDescription = this.editInputValue.trim()
-
-    // 判断是创建模式还是编辑模式（通过 editingAnnotationId 判断）
-    const isEditing = !!this.editingAnnotationId
-
-    if (isEditing && this.editingAnnotationId) {
-      // 编辑模式：更新已有标注
-      const updatedAnnotation: AnnotationItem = {
-        id: this.editingAnnotationId,
-        lineId: this.selectedTextInfo.lineId,
-        start: this.selectedTextInfo.start,
-        end: this.selectedTextInfo.end,
-        content: this.selectedTextInfo.content,
-        type: this.selectedAnnotationType,
-        description: trimmedDescription,
-        color: typeColor
-      }
-      this.annotations = this.annotations.map(ann => (ann.id === updatedAnnotation.id ? updatedAnnotation : ann))
-    } else {
-      // 创建模式：创建新标注
-      const newId = `${Date.now()}`
-      const newAnnotation: AnnotationItem = {
-        id: newId,
-        lineId: this.selectedTextInfo.lineId,
-        start: this.selectedTextInfo.start,
-        end: this.selectedTextInfo.end,
-        content: this.selectedTextInfo.content,
-        type: this.selectedAnnotationType,
-        description: trimmedDescription,
-        color: typeColor
-      }
-      this.annotations = [...this.annotations, newAnnotation]
-    }
-
-    // 清除文本选择（使用 Shadow DOM 的选择）
-    const selection = getShadowDOMSelection(this.shadowRoot)
-    if (selection) {
-      selection.removeAllRanges()
-    } else {
-      // 回退到全局选择清除（如果 Shadow DOM 选择不可用）
-      getSelection()?.removeAllRanges()
-    }
-
-    // 隐藏编辑图层
-    // 重置到默认模式
-    this.resetToDefaultMode()
-  }
-
-  /**
-   * 处理下拉选择框变化
-   */
-  private handleTypeSelectChange(e: Event) {
-    const select = e.target as HTMLSelectElement
-    if (this.isEditingRelationship) {
-      this.selectedRelationshipType = select.value
-    } else {
-      this.selectedAnnotationType = select.value
-    }
-  }
-
-  /**
-   * 处理输入框输入
-   */
-  private handleInputChange(e: Event) {
-    const input = e.target as HTMLInputElement
-    this.editInputValue = input.value
-  }
-
-  /**
-   * 处理输入框回车键
-   */
-  private handleInputKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      this.handleConfirmEdit()
-    } else if (e.key === 'Escape') {
-      // 按 Escape 重置到默认模式
-      this.resetToDefaultMode()
-    }
-  }
-
-  /**
-   * 处理标注右键菜单
-   */
-  private handleAnnotationContextMenu(e: MouseEvent, annotationId: string) {
-    // 如果正在创建关系，不允许右键菜单
-    if (this.functionMode === FunctionMode.CREATING_RELATIONSHIP) {
-      return
-    }
-
-    // 如果 editingEnabled 为 false，不允许切换模式
-    if (!this.editingEnabled) {
-      return
-    }
-
-    e.preventDefault()
-    e.stopPropagation()
-
-    // 重置文本选择状态，确保右键菜单可以正常显示
-    this.isSelectingText = false
-
-    const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
-    if (!mainContainer) return
-
-    this.contextMenuPosition = calculateContextMenuPosition(e, mainContainer, this.scrollContainer)
-
-    this.contextMenuTarget = {
-      type: 'annotation',
-      id: annotationId
-    }
-
-    // 切换到右键菜单模式
-    this.functionMode = FunctionMode.CONTEXT_MENU_OPEN
-  }
-
-  /**
    * 处理关系右键菜单
    */
   private handleRelationshipContextMenu(e: MouseEvent, relationshipId: string) {
@@ -1250,240 +1066,6 @@ export class YsTextAnnotation extends LitElement {
 
     // 切换到右键菜单模式
     this.functionMode = FunctionMode.CONTEXT_MENU_OPEN
-  }
-
-  /**
-   * 处理编辑关系操作
-   */
-  private handleEditRelationship() {
-    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'relationship') {
-      return
-    }
-
-    // 如果 editingEnabled 为 false，不允许切换模式
-    if (!this.editingEnabled) {
-      return
-    }
-
-    // 查找要编辑的关系
-    const relationship = this.relationships.find(rel => rel.id === this.contextMenuTarget!.id)
-    if (!relationship) {
-      return
-    }
-
-    // 设置编辑状态
-    this.editingRelationshipId = relationship.id
-    this.selectedRelationshipType = relationship.type || ''
-    this.editInputValue = relationship.description || ''
-
-    // 保存右键菜单位置用于定位编辑层
-    const menuPosition = { ...this.contextMenuPosition }
-
-    // 清理右键菜单目标
-    this.contextMenuTarget = null
-
-    // 切换到创建/编辑标注模式（编辑层也用于关系编辑）
-    this.functionMode = FunctionMode.CREATING_ANNOTATION
-
-    // 使用工具函数计算编辑层位置，确保在可视范围内
-    if (this.scrollContainer) {
-      const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-      const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
-      if (contentWrapper && mainContainer) {
-        this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper, mainContainer)
-      } else {
-        this.editLayerPosition = menuPosition
-      }
-    } else {
-      this.editLayerPosition = menuPosition
-    }
-  }
-
-  /**
-   * 处理创建关系操作
-   */
-  private handleCreateRelationship() {
-    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation') {
-      return
-    }
-
-    // 如果 editingEnabled 为 false，不允许切换模式
-    if (!this.editingEnabled) {
-      return
-    }
-
-    // 开始创建关系
-    this.startRelationshipCreation(this.contextMenuTarget.id)
-  }
-
-  /**
-   * 处理创建远程标注操作（记录第一个标注ID）
-   */
-  private handleCreateRemoteAnnotation() {
-    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation') {
-      return
-    }
-
-    // 如果 editingEnabled 为 false，不允许切换模式
-    if (!this.editingEnabled) {
-      return
-    }
-
-    // 记录远程标注ID（去掉 'anno-' 前缀）
-    const annotationId = this.contextMenuTarget.id.replace(/^anno-/, '')
-    this.remoteAnnotationId = annotationId
-
-    // 关闭右键菜单，重置到默认模式
-    this.resetToDefaultMode()
-  }
-
-  /**
-   * 处理取消记录远程标注操作
-   */
-  private handleCancelRemoteAnnotation() {
-    // 清除远程标注ID
-    this.remoteAnnotationId = null
-
-    // 关闭右键菜单，重置到默认模式
-    this.resetToDefaultMode()
-  }
-
-  /**
-   * 处理连接远程标注操作（连接到之前记录的标注）
-   */
-  private handleConnectRemoteAnnotation() {
-    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation' || !this.remoteAnnotationId) {
-      return
-    }
-
-    // 如果 editingEnabled 为 false，不允许切换模式
-    if (!this.editingEnabled) {
-      return
-    }
-
-    // 获取当前标注ID（去掉 'anno-' 前缀）
-    const currentAnnotationId = this.contextMenuTarget.id.replace(/^anno-/, '')
-
-    // 确保不是连接到自己
-    if (currentAnnotationId === this.remoteAnnotationId) {
-      // 重置远程标注ID
-      this.remoteAnnotationId = null
-      this.resetToDefaultMode()
-      return
-    }
-
-    // 创建关系
-    const defaultRelationshipType = this.relationshipType[0]
-    const newRelationship: RelationshipItem = {
-      id: `rel-${Date.now()}`,
-      startId: this.remoteAnnotationId,
-      endId: currentAnnotationId,
-      type: defaultRelationshipType?.type || '',
-      description: '',
-      color: defaultRelationshipType?.color || '#c12c1f'
-    }
-
-    this.relationships = [...this.relationships, newRelationship]
-
-    // 清除远程标注ID
-    this.remoteAnnotationId = null
-
-    // 重置到默认模式
-    this.resetToDefaultMode()
-  }
-
-  /**
-   * 处理编辑标注操作
-   */
-  private handleEditAnnotation() {
-    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation') {
-      return
-    }
-
-    // 如果 editingEnabled 为 false，不允许切换模式
-    if (!this.editingEnabled) {
-      return
-    }
-
-    // 查找要编辑的标注
-    const annotation = this.annotations.find(ann => ann.id === this.contextMenuTarget!.id)
-    if (!annotation) {
-      return
-    }
-
-    // 设置编辑状态
-    this.editingAnnotationId = annotation.id
-    this.selectedAnnotationType = annotation.type
-    this.editInputValue = annotation.description || ''
-
-    // 创建 SelectedTextInfo 用于定位编辑层
-    this.selectedTextInfo = {
-      lineId: annotation.lineId,
-      start: annotation.start,
-      end: annotation.end,
-      content: annotation.content
-    }
-
-    // 清理右键菜单目标
-    this.contextMenuTarget = null
-
-    // 切换到创建/编辑标注模式（先切换模式，让编辑层渲染）
-    // 通过 editingAnnotationId 区分是新增还是编辑
-    this.functionMode = FunctionMode.CREATING_ANNOTATION
-
-    // 尝试根据标注信息创建 Range 对象，使用和新建标注相同的位置计算逻辑
-    if (this.scrollContainer) {
-      const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-      const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
-      if (contentWrapper && mainContainer) {
-        // 尝试根据标注信息创建 Range
-        const range = this.createRangeFromAnnotation(annotation)
-        if (range) {
-          // 如果成功创建 Range，使用和新建标注相同的位置计算逻辑
-          this.editLayerPosition = calculateEditLayerPosition(range, this.scrollContainer, contentWrapper, mainContainer)
-          // 保存 Range，以便后续可能需要使用
-          this.savedRange = range
-        } else {
-          // 如果无法创建 Range（例如标注不在可视区域内），回退到使用右键菜单位置
-          const menuPosition = { ...this.contextMenuPosition }
-          this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper, mainContainer)
-        }
-      } else {
-        // 如果没有 contentWrapper 或 mainContainer，使用右键菜单位置
-        this.editLayerPosition = { ...this.contextMenuPosition }
-      }
-    } else {
-      // 如果没有 scrollContainer，使用右键菜单位置
-      this.editLayerPosition = { ...this.contextMenuPosition }
-    }
-  }
-
-  /**
-   * 处理删除操作
-   */
-  private handleDelete() {
-    // 如果正在创建关系，不允许删除
-    if (this.functionMode === FunctionMode.CREATING_RELATIONSHIP) {
-      return
-    }
-
-    if (!this.contextMenuTarget) return
-
-    if (this.contextMenuTarget.type === 'annotation') {
-      // 删除标注
-      const id = this.contextMenuTarget.id
-      this.annotations = this.annotations.filter(annotation => annotation.id !== id)
-      // 删除该标注关联的所有关系
-      this.relationships = this.relationships.filter(relationship => relationship.startId !== id && relationship.endId !== id)
-    } else if (this.contextMenuTarget.type === 'relationship') {
-      // 删除关系
-      const id = this.contextMenuTarget.id
-      this.relationships = this.relationships.filter(relationship => relationship.id !== id)
-    }
-
-    // 关闭右键菜单
-    // 重置到默认模式
-    this.resetToDefaultMode()
   }
 
   /**
@@ -1687,30 +1269,6 @@ export class YsTextAnnotation extends LitElement {
       document.removeEventListener('click', this.relationshipClickHandler, true)
       this.relationshipClickHandler = undefined
     }
-  }
-
-  /**
-   * 重置到默认模式（清理所有功能相关状态）
-   */
-  private resetToDefaultMode() {
-    // 清理编辑层相关状态
-    this.selectedTextInfo = null
-    this.savedRange = null
-    this.editInputValue = ''
-    this.selectedAnnotationType = ''
-    this.selectedRelationshipType = ''
-    this.justSelectedText = false
-    this.editingAnnotationId = null
-    this.editingRelationshipId = null
-
-    // 清理右键菜单相关状态
-    this.contextMenuTarget = null
-
-    // 清理关系创建相关状态和事件监听
-    this.cancelRelationshipCreation()
-
-    // 重置功能模式到默认
-    this.functionMode = FunctionMode.DEFAULT
   }
 
   /**
@@ -2336,87 +1894,454 @@ export class YsTextAnnotation extends LitElement {
         </div>
 
         <!-- 编辑层 -->
-        ${this.editLayerVisible
-          ? html`<div class="edit-layer" style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;">
-              ${this.isEditingRelationship
-                ? html`
-                    <select required .value=${this.selectedRelationshipType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
-                      <option value="" disabled>选择关系类型</option>
-                      ${this.relationshipType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
-                    </select>
-                    <input
-                      type="text"
-                      .value=${this.editInputValue}
-                      @input=${this.handleInputChange}
-                      @keydown=${this.handleInputKeyDown}
-                      placeholder="输入描述（可选）"
-                    />
-                    <button @click=${this.handleConfirmEdit}>确认</button>
-                  `
-                : html`
-                    <select required .value=${this.selectedAnnotationType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
-                      <option value="" disabled>选择类型</option>
-                      ${this.annotationType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
-                    </select>
-                    <input
-                      type="text"
-                      .value=${this.editInputValue}
-                      @input=${this.handleInputChange}
-                      @keydown=${this.handleInputKeyDown}
-                      placeholder="输入描述（可选）"
-                    />
-                    <button @click=${this.handleConfirmEdit}>确认</button>
-                  `}
-            </div>`
-          : null}
+        ${this._renderEditLayer()}
 
         <!-- 右键菜单层 -->
-        ${this.contextMenuVisible
-          ? (() => {
-              // 获取当前右键的标注信息（用于显示按钮文本）
-              let currentAnnotation: AnnotationItem | undefined
-              let remoteAnnotation: AnnotationItem | undefined
-              let isCurrentRemote = false
-
-              if (this.contextMenuTarget?.type === 'annotation') {
-                const currentId = this.contextMenuTarget.id.replace(/^anno-/, '')
-                currentAnnotation = this.annotations.find(ann => ann.id === currentId)
-
-                if (this.remoteAnnotationId) {
-                  remoteAnnotation = this.annotations.find(ann => ann.id === this.remoteAnnotationId)
-                  isCurrentRemote = currentId === this.remoteAnnotationId
-                }
-              }
-
-              return html`<div
-                class="context-menu"
-                style="left: ${this.contextMenuPosition.x}px; top: ${this.contextMenuPosition.y}px;"
-                @click=${(e: MouseEvent) => e.stopPropagation()}
-              >
-                ${this.contextMenuTarget?.type === 'annotation'
-                  ? html`
-                      <button class="context-menu-item create-relationship" @click=${this.handleCreateRelationship}>创建关系</button>
-                      ${!this.remoteAnnotationId
-                        ? html`<button class="context-menu-item create-remote-annotation" @click=${this.handleCreateRemoteAnnotation}>
-                            记录<span style="color: ${currentAnnotation?.color || '#2d0bdf'}">${currentAnnotation?.content || '标注'}</span>
-                          </button>`
-                        : isCurrentRemote
-                          ? html`<button class="context-menu-item cancel-remote-annotation" @click=${this.handleCancelRemoteAnnotation}>取消记录</button>`
-                          : html`<button class="context-menu-item connect-remote-annotation" @click=${this.handleConnectRemoteAnnotation}>
-                              连接<span style="color: ${remoteAnnotation?.color || '#2d0bdf'}">${remoteAnnotation?.content || '标注'}</span>
-                            </button>`}
-                      <button class="context-menu-item edit-annotation" @click=${this.handleEditAnnotation}>编辑标注</button>
-                    `
-                  : null}
-                ${this.contextMenuTarget?.type === 'relationship'
-                  ? html`<button class="context-menu-item edit-relationship" @click=${this.handleEditRelationship}>编辑关系</button>`
-                  : null}
-                <button class="context-menu-item delete" @click=${this.handleDelete}>删除</button>
-              </div>`
-            })()
-          : null}
+        ${this._renderContextMenu()}
       </div>
     `
+  }
+
+  /**
+   * -------------------------------------------------- 编辑层相关状态 --------------------------------------------------
+   */
+
+  // 计算属性 -- 编辑层是否可见
+  private get editLayerVisible(): boolean {
+    return this.functionMode === FunctionMode.CREATING_ANNOTATION
+  }
+  // 计算属性 -- 判断是在编辑关系还是编辑标注
+  private get isEditingRelationship(): boolean {
+    return !!this.editingRelationshipId
+  }
+
+  @state()
+  private selectedAnnotationType: string = '' // 选中标注类型
+  @state()
+  private selectedRelationshipType: string = '' // 选中关系类型
+  @state()
+  private editInputValue = '' // 编辑输入值
+
+  private editingAnnotationId: string | null = null // 正在编辑的标注ID
+  private editingRelationshipId: string | null = null // 正在编辑的关系ID
+
+  // 输入 -- 下拉选择框变化
+  private handleTypeSelectChange(e: Event) {
+    const select = e.target as HTMLSelectElement
+    if (this.isEditingRelationship) {
+      this.selectedRelationshipType = select.value
+    } else {
+      this.selectedAnnotationType = select.value
+    }
+  }
+
+  // 输入 -- 输入框输入
+  private handleInputChange(e: Event) {
+    const input = e.target as HTMLInputElement
+    this.editInputValue = input.value
+  }
+
+  // 输入 -- 回车确认编辑
+  private handleInputKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      this.handleConfirmEdit()
+    } else if (e.key === 'Escape') {
+      // 按 Escape 重置到默认模式
+      this.resetToDefaultMode()
+    }
+  }
+
+  // 点击 -- 确认编辑
+  private handleConfirmEdit() {
+    // 判断是编辑关系还是编辑/创建标注
+    if (this.isEditingRelationship && this.editingRelationshipId) {
+      // 编辑关系
+      const relationship = this.relationships.find(rel => rel.id === this.editingRelationshipId)
+      if (relationship) {
+        // 查找选中的关系类型对应的颜色
+        const selectedTypeObj = this.relationshipType.find(type => type.type === this.selectedRelationshipType)
+        const typeColor = selectedTypeObj?.color || relationship.color || '#c12c1f'
+
+        const updatedRelationship: RelationshipItem = {
+          ...relationship,
+          type: this.selectedRelationshipType,
+          description: this.editInputValue.trim(),
+          color: typeColor
+        }
+
+        this.relationships = this.relationships.map(rel => (rel.id === updatedRelationship.id ? updatedRelationship : rel))
+      }
+      this.resetToDefaultMode()
+      return
+    }
+
+    // 处理标注的创建/编辑
+    // 验证下拉选择框是否已选择（必填）
+    if (!this.selectedAnnotationType || !this.selectedTextInfo) {
+      return
+    }
+
+    // 查找选中的类型对应的颜色
+    const selectedTypeObj = this.annotationType.find(type => type.type === this.selectedAnnotationType)
+    const typeColor = selectedTypeObj?.color || '#2d0bdf'
+
+    const trimmedDescription = this.editInputValue.trim()
+
+    // 判断是创建模式还是编辑模式（通过 editingAnnotationId 判断）
+    const isEditing = !!this.editingAnnotationId
+
+    if (isEditing && this.editingAnnotationId) {
+      // 编辑模式：更新已有标注
+      const updatedAnnotation: AnnotationItem = {
+        id: this.editingAnnotationId,
+        lineId: this.selectedTextInfo.lineId,
+        start: this.selectedTextInfo.start,
+        end: this.selectedTextInfo.end,
+        content: this.selectedTextInfo.content,
+        type: this.selectedAnnotationType,
+        description: trimmedDescription,
+        color: typeColor
+      }
+      this.annotations = this.annotations.map(ann => (ann.id === updatedAnnotation.id ? updatedAnnotation : ann))
+    } else {
+      // 创建模式：创建新标注
+      const newId = `${Date.now()}`
+      const newAnnotation: AnnotationItem = {
+        id: newId,
+        lineId: this.selectedTextInfo.lineId,
+        start: this.selectedTextInfo.start,
+        end: this.selectedTextInfo.end,
+        content: this.selectedTextInfo.content,
+        type: this.selectedAnnotationType,
+        description: trimmedDescription,
+        color: typeColor
+      }
+      this.annotations = [...this.annotations, newAnnotation]
+    }
+
+    // 清除文本选择（使用 Shadow DOM 的选择）
+    const selection = getShadowDOMSelection(this.shadowRoot)
+    if (selection) {
+      selection.removeAllRanges()
+    } else {
+      // 回退到全局选择清除（如果 Shadow DOM 选择不可用）
+      getSelection()?.removeAllRanges()
+    }
+
+    // 隐藏编辑图层
+    // 重置到默认模式
+    this.resetToDefaultMode()
+  }
+
+  // 渲染 -- 编辑层
+  _renderEditLayer() {
+    return html`${this.editLayerVisible
+      ? html`<div class="edit-layer" style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;">
+          ${this.isEditingRelationship
+            ? html`
+                <select required .value=${this.selectedRelationshipType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
+                  <option value="" disabled>选择关系类型</option>
+                  ${this.relationshipType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+                </select>
+                <input
+                  type="text"
+                  .value=${this.editInputValue}
+                  @input=${this.handleInputChange}
+                  @keydown=${this.handleInputKeyDown}
+                  placeholder="输入描述（可选）"
+                />
+                <button @click=${this.handleConfirmEdit}>确认</button>
+              `
+            : html`
+                <select required .value=${this.selectedAnnotationType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
+                  <option value="" disabled>选择类型</option>
+                  ${this.annotationType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+                </select>
+                <input
+                  type="text"
+                  .value=${this.editInputValue}
+                  @input=${this.handleInputChange}
+                  @keydown=${this.handleInputKeyDown}
+                  placeholder="输入描述（可选）"
+                />
+                <button @click=${this.handleConfirmEdit}>确认</button>
+              `}
+        </div>`
+      : null}`
+  }
+
+  /**
+   * -------------------------------------------------- 右键菜单相关状态 --------------------------------------------------
+   */
+  // 计算属性 -- 右键菜单是否可见
+  private get contextMenuVisible(): boolean {
+    return this.functionMode === FunctionMode.CONTEXT_MENU_OPEN
+  }
+
+  @state()
+  private contextMenuPosition = { x: 0, y: 0 } // 右键菜单位置
+  private contextMenuTarget: ContextMenuTarget | null = null // 右键菜单目标
+  @state()
+  private remoteAnnotationId: string | null = null // 远程标注ID
+
+  // 开启 -- 开启右键菜单
+  private handleAnnotationContextMenu(e: MouseEvent, annotationId: string) {
+    // 如果正在创建关系，不允许右键菜单
+    if (this.functionMode === FunctionMode.CREATING_RELATIONSHIP) return
+    // 如果 editingEnabled 为 false，不允许切换模式
+    if (!this.editingEnabled) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    // 重置文本选择状态，确保右键菜单可以正常显示
+    this.isSelectingText = false
+    const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
+    if (!mainContainer) return
+    this.contextMenuPosition = calculateContextMenuPosition(e, mainContainer, this.scrollContainer)
+    this.contextMenuTarget = { type: 'annotation', id: annotationId }
+
+    // 切换到右键菜单模式
+    this.functionMode = FunctionMode.CONTEXT_MENU_OPEN
+  }
+
+  // 点击 -- 创建关系
+  private handleCreateRelationship() {
+    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation') return
+    // 如果 editingEnabled 为 false，不允许切换模式
+    if (!this.editingEnabled) return
+
+    // 开始创建关系
+    this.startRelationshipCreation(this.contextMenuTarget.id)
+  }
+
+  // 点击 -- 记录XX （记录第一个标注ID）
+  private handleCreateRemoteAnnotation() {
+    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation') return
+
+    // 如果 editingEnabled 为 false，不允许切换模式
+    if (!this.editingEnabled) return
+
+    // 记录远程标注ID（去掉 'anno-' 前缀）
+    const annotationId = this.contextMenuTarget.id.replace(/^anno-/, '')
+    this.remoteAnnotationId = annotationId
+
+    // 关闭右键菜单，重置到默认模式
+    this.resetToDefaultMode()
+  }
+
+  // 点击 -- 取消记录
+  private handleCancelRemoteAnnotation() {
+    // 清除远程标注ID
+    this.remoteAnnotationId = null
+    // 关闭右键菜单，重置到默认模式
+    this.resetToDefaultMode()
+  }
+
+  // 点击 -- 连接XX （连接到之前记录的标注）
+  private handleConnectRemoteAnnotation() {
+    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation' || !this.remoteAnnotationId) return
+
+    // 如果 editingEnabled 为 false，不允许切换模式
+    if (!this.editingEnabled) return
+
+    // 获取当前标注ID（去掉 'anno-' 前缀）
+    const currentAnnotationId = this.contextMenuTarget.id.replace(/^anno-/, '')
+
+    // 确保不是连接到自己
+    if (currentAnnotationId === this.remoteAnnotationId) {
+      // 重置远程标注ID
+      this.remoteAnnotationId = null
+      this.resetToDefaultMode()
+      return
+    }
+
+    // 创建关系
+    const defaultRelationshipType = this.relationshipType[0]
+    const newRelationship: RelationshipItem = {
+      id: `rel-${Date.now()}`,
+      startId: this.remoteAnnotationId,
+      endId: currentAnnotationId,
+      type: defaultRelationshipType?.type || '',
+      description: '',
+      color: defaultRelationshipType?.color || '#c12c1f'
+    }
+
+    this.relationships = [...this.relationships, newRelationship]
+
+    // 清除远程标注ID
+    this.remoteAnnotationId = null
+
+    // 重置到默认模式
+    this.resetToDefaultMode()
+  }
+
+  // 点击 -- 编辑标注
+  private handleEditAnnotation() {
+    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'annotation') return
+
+    // 如果 editingEnabled 为 false，不允许切换模式
+    if (!this.editingEnabled) return
+
+    // 查找要编辑的标注
+    const annotation = this.annotations.find(ann => ann.id === this.contextMenuTarget!.id)
+    if (!annotation) return
+
+    // 设置编辑状态
+    this.editingAnnotationId = annotation.id
+    this.selectedAnnotationType = annotation.type
+    this.editInputValue = annotation.description || ''
+
+    // 创建 SelectedTextInfo 用于定位编辑层
+    this.selectedTextInfo = {
+      lineId: annotation.lineId,
+      start: annotation.start,
+      end: annotation.end,
+      content: annotation.content
+    }
+
+    // 清理右键菜单目标
+    this.contextMenuTarget = null
+
+    // 切换到创建/编辑标注模式（先切换模式，让编辑层渲染）
+    // 通过 editingAnnotationId 区分是新增还是编辑
+    this.functionMode = FunctionMode.CREATING_ANNOTATION
+
+    // 尝试根据标注信息创建 Range 对象，使用和新建标注相同的位置计算逻辑
+    if (this.scrollContainer) {
+      const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
+      const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
+      if (contentWrapper && mainContainer) {
+        // 尝试根据标注信息创建 Range
+        const range = this.createRangeFromAnnotation(annotation)
+        if (range) {
+          // 如果成功创建 Range，使用和新建标注相同的位置计算逻辑
+          this.editLayerPosition = calculateEditLayerPosition(range, this.scrollContainer, contentWrapper, mainContainer)
+          // 保存 Range，以便后续可能需要使用
+          this.savedRange = range
+        } else {
+          // 如果无法创建 Range（例如标注不在可视区域内），回退到使用右键菜单位置
+          const menuPosition = { ...this.contextMenuPosition }
+          this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper, mainContainer)
+        }
+      } else {
+        // 如果没有 contentWrapper 或 mainContainer，使用右键菜单位置
+        this.editLayerPosition = { ...this.contextMenuPosition }
+      }
+    } else {
+      // 如果没有 scrollContainer，使用右键菜单位置
+      this.editLayerPosition = { ...this.contextMenuPosition }
+    }
+  }
+
+  // 点击 -- 编辑关系
+  private handleEditRelationship() {
+    if (!this.contextMenuTarget || this.contextMenuTarget.type !== 'relationship') return
+
+    // 如果 editingEnabled 为 false，不允许切换模式
+    if (!this.editingEnabled) return
+
+    // 查找要编辑的关系
+    const relationship = this.relationships.find(rel => rel.id === this.contextMenuTarget!.id)
+    if (!relationship) return
+
+    // 设置编辑状态
+    this.editingRelationshipId = relationship.id
+    this.selectedRelationshipType = relationship.type || ''
+    this.editInputValue = relationship.description || ''
+
+    // 保存右键菜单位置用于定位编辑层
+    const menuPosition = { ...this.contextMenuPosition }
+
+    // 清理右键菜单目标
+    this.contextMenuTarget = null
+
+    // 切换到创建/编辑标注模式（编辑层也用于关系编辑）
+    this.functionMode = FunctionMode.CREATING_ANNOTATION
+
+    // 使用工具函数计算编辑层位置，确保在可视范围内
+    if (this.scrollContainer) {
+      const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
+      const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
+      if (contentWrapper && mainContainer) {
+        this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper, mainContainer)
+      } else {
+        this.editLayerPosition = menuPosition
+      }
+    } else {
+      this.editLayerPosition = menuPosition
+    }
+  }
+
+  // 点击 -- 删除
+  private handleDelete() {
+    // 如果正在创建关系，不允许删除
+    if (this.functionMode === FunctionMode.CREATING_RELATIONSHIP) return
+
+    if (!this.contextMenuTarget) return
+
+    if (this.contextMenuTarget.type === 'annotation') {
+      // 删除标注
+      const id = this.contextMenuTarget.id
+      this.annotations = this.annotations.filter(annotation => annotation.id !== id)
+      // 删除该标注关联的所有关系
+      this.relationships = this.relationships.filter(relationship => relationship.startId !== id && relationship.endId !== id)
+    } else if (this.contextMenuTarget.type === 'relationship') {
+      // 删除关系
+      const id = this.contextMenuTarget.id
+      this.relationships = this.relationships.filter(relationship => relationship.id !== id)
+    }
+
+    // 关闭右键菜单，重置到默认模式
+    this.resetToDefaultMode()
+  }
+
+  // 渲染 -- 右键菜单
+  _renderContextMenu() {
+    return html`${this.contextMenuVisible
+      ? (() => {
+          // 获取当前右键的标注信息（用于显示按钮文本）
+          let currentAnnotation: AnnotationItem | undefined
+          let remoteAnnotation: AnnotationItem | undefined
+          let isCurrentRemote = false
+
+          if (this.contextMenuTarget?.type === 'annotation') {
+            const currentId = this.contextMenuTarget.id.replace(/^anno-/, '')
+            currentAnnotation = this.annotations.find(ann => ann.id === currentId)
+
+            if (this.remoteAnnotationId) {
+              remoteAnnotation = this.annotations.find(ann => ann.id === this.remoteAnnotationId)
+              isCurrentRemote = currentId === this.remoteAnnotationId
+            }
+          }
+
+          return html`<div
+            class="context-menu"
+            style="left: ${this.contextMenuPosition.x}px; top: ${this.contextMenuPosition.y}px;"
+            @click=${(e: MouseEvent) => e.stopPropagation()}
+          >
+            ${this.contextMenuTarget?.type === 'annotation'
+              ? html`
+                  <button class="context-menu-item create-relationship" @click=${this.handleCreateRelationship}>创建关系</button>
+                  ${!this.remoteAnnotationId
+                    ? html`<button class="context-menu-item create-remote-annotation" @click=${this.handleCreateRemoteAnnotation}>
+                        记录<span style="color: ${currentAnnotation?.color || '#2d0bdf'}">${currentAnnotation?.content || '标注'}</span>
+                      </button>`
+                    : isCurrentRemote
+                      ? html`<button class="context-menu-item cancel-remote-annotation" @click=${this.handleCancelRemoteAnnotation}>取消记录</button>`
+                      : html`<button class="context-menu-item connect-remote-annotation" @click=${this.handleConnectRemoteAnnotation}>
+                          连接<span style="color: ${remoteAnnotation?.color || '#2d0bdf'}">${remoteAnnotation?.content || '标注'}</span>
+                        </button>`}
+                  <button class="context-menu-item edit-annotation" @click=${this.handleEditAnnotation}>编辑标注</button>
+                `
+              : null}
+            ${this.contextMenuTarget?.type === 'relationship'
+              ? html`<button class="context-menu-item edit-relationship" @click=${this.handleEditRelationship}>编辑关系</button>`
+              : null}
+            <button class="context-menu-item delete" @click=${this.handleDelete}>删除</button>
+          </div>`
+        })()
+      : null}`
   }
 }
 
