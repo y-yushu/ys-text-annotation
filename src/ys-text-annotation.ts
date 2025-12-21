@@ -122,6 +122,12 @@ export class YsTextAnnotation extends LitElement {
   private visibleLayerHeight = 0
 
   /**
+   * 滚动位置，用于触发SVG重绘
+   */
+  @state()
+  private _currentScrollTop = 0
+
+  /**
    * 分组后的标注数据（按100份分组）
    * 格式：{ segmentIndex: number, annotations: AnnotationItem[], positionPercent: number }
    */
@@ -284,6 +290,7 @@ export class YsTextAnnotation extends LitElement {
   private updateTimer?: number
   private relationshipTimer?: number
   private globalMouseUpHandler?: () => void
+  private scrollThrottleTimer?: number
 
   connectedCallback() {
     super.connectedCallback()
@@ -300,6 +307,10 @@ export class YsTextAnnotation extends LitElement {
     super.disconnectedCallback()
     this.updateTimer && cancelAnimationFrame(this.updateTimer)
     this.relationshipTimer && cancelAnimationFrame(this.relationshipTimer)
+    if (this.scrollThrottleTimer) {
+      clearTimeout(this.scrollThrottleTimer)
+      this.scrollThrottleTimer = undefined
+    }
     this.resizeObserver?.disconnect()
     if (this.globalMouseUpHandler) {
       document.removeEventListener('mouseup', this.globalMouseUpHandler)
@@ -577,9 +588,34 @@ export class YsTextAnnotation extends LitElement {
     }
   }
 
+  /**
+   * 节流更新SVG渲染（50ms内只执行最后一次）
+   */
+  private throttledUpdateSVG() {
+    // 节流：清除之前的定时器
+    if (this.scrollThrottleTimer) {
+      clearTimeout(this.scrollThrottleTimer)
+    }
+
+    // 设置新的定时器，50ms后执行最后一次更新
+    this.scrollThrottleTimer = window.setTimeout(() => {
+      if (this.scrollContainer) {
+        // 更新滚动位置以触发SVG重绘
+        this._currentScrollTop = this.scrollContainer.scrollTop
+        // 滚动时重新计算关系路径
+        this.measureRelationships()
+      }
+      this.scrollThrottleTimer = undefined
+    }, 50)
+  }
+
   private handleScroll() {
     this.updateTimer && cancelAnimationFrame(this.updateTimer)
     this.updateTimer = requestAnimationFrame(() => {
+      // SVG渲染使用节流更新
+      this.throttledUpdateSVG()
+
+      // 其他逻辑立即执行
       this.updateVisibleRange()
       // 如果编辑层可见，重新计算位置（仅创建模式，编辑模式不重新定位）
       if (this.editLayerVisible && this.savedRange && !this.editingAnnotationId) {
@@ -2027,6 +2063,106 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
+   * 渲染关系SVG层
+   */
+  private _renderRelationshipSVG() {
+    return svg`
+      <defs>
+        ${this.relationshipPaths.map(path => {
+          // 为每个路径生成唯一的marker ID
+          const endMarkerId = `arrowhead-end-${path.id}`
+          const startMarkerId = `arrowhead-start-${path.id}`
+
+          return svg`
+            <marker
+              id=${endMarkerId}
+              markerWidth="6"
+              markerHeight="6"
+              refX="3"
+              refY="3"
+              orient="auto"
+            >
+              <circle 
+                cx="3" 
+                cy="3" 
+                r="2.5" 
+                fill="none" 
+                stroke=${path.color}
+                stroke-width="1.5"
+              />
+            </marker>
+            <marker
+              id=${startMarkerId}
+              markerWidth="10"
+              markerHeight="10"
+              refX="1"
+              refY="3"
+              orient="auto"
+            >
+              <circle cx="3" cy="3" r="2.5" fill=${path.color} />
+            </marker>
+          `
+        })}
+      </defs>
+      ${this.relationshipPaths.map(path => {
+        // 为每个路径生成唯一的marker ID
+        const endMarkerId = `arrowhead-end-${path.id}`
+        const startMarkerId = `arrowhead-start-${path.id}`
+
+        if (path.label && path.labelX !== undefined && path.labelY !== undefined && path.labelAngle !== undefined) {
+          return svg`
+            <path
+              class="relationship-path"
+              d=${path.d}
+              data-rel-id=${path.id}
+              stroke=${path.color}
+              marker-end=${`url(#${endMarkerId})`}
+              marker-start=${`url(#${startMarkerId})`}
+              @mouseenter=${this.handleHighlightMouseEnter}
+              @mouseleave=${this.handleHighlightMouseLeave}
+              @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
+            ></path>
+            <text
+              class="relationship-label"
+              x=${path.labelX}
+              y=${path.labelY}
+              fill=${path.color}
+              transform=${`rotate(${path.labelAngle} ${path.labelX} ${path.labelY})`}
+              @mouseenter=${this.handleHighlightMouseEnter}
+              @mouseleave=${this.handleHighlightMouseLeave}
+              @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
+            >${path.label}</text>
+          `
+        }
+        return svg`
+          <path
+            class="relationship-path"
+            d=${path.d}
+            data-rel-id=${path.id}
+            stroke=${path.color}
+            marker-end=${`url(#${endMarkerId})`}
+            marker-start=${`url(#${startMarkerId})`}
+            @mouseenter=${this.handleHighlightMouseEnter}
+            @mouseleave=${this.handleHighlightMouseLeave}
+            @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
+          ></path>
+        `
+      })}
+      ${
+        this.tempRelationshipPath
+          ? svg`<path
+          class="relationship-path temp-relationship-path"
+          d=${this.tempRelationshipPath.d}
+          stroke="#c12c1f"
+          stroke-dasharray="5,5"
+          opacity="0.6"
+        ></path>`
+          : null
+      }
+    `
+  }
+
+  /**
    * 获取标注在虚拟列表中的相关关系
    * 只返回另一端标注在虚拟列表渲染范围内的关系
    * @param annotationId 标注ID
@@ -2072,6 +2208,8 @@ export class YsTextAnnotation extends LitElement {
   }
 
   render() {
+    // 引用_currentScrollTop确保滚动时触发SVG重绘
+    void this._currentScrollTop
     const visibleLines = this.lines.slice(this.visibleStartIndex, this.visibleEndIndex + 1)
     // 使用 VirtualCore 计算的总高度，回退到预估高度
     const totalHeight = this.virtualTotalHeight || this.lines.length * this.lineHeight
@@ -2091,96 +2229,7 @@ export class YsTextAnnotation extends LitElement {
               style="transform: translateY(${offsetTop}px); height: ${visibleHeight}px;"
               overflow="visible"
             >
-              <defs>
-                ${this.relationshipPaths.map(path => {
-                  // 为每个路径生成唯一的marker ID
-                  const endMarkerId = `arrowhead-end-${path.id}`
-                  const startMarkerId = `arrowhead-start-${path.id}`
-
-                  return svg`
-                    <marker
-                      id=${endMarkerId}
-                      markerWidth="6"
-                      markerHeight="6"
-                      refX="3"
-                      refY="3"
-                      orient="auto"
-                    >
-                      <circle 
-                        cx="3" 
-                        cy="3" 
-                        r="2.5" 
-                        fill="none" 
-                        stroke=${path.color}
-                        stroke-width="1.5"
-                      />
-                    </marker>
-                    <marker
-                      id=${startMarkerId}
-                      markerWidth="10"
-                      markerHeight="10"
-                      refX="1"
-                      refY="3"
-                      orient="auto"
-                    >
-                      <circle cx="3" cy="3" r="2.5" fill=${path.color} />
-                    </marker>
-                  `
-                })}
-              </defs>
-              ${this.relationshipPaths.map(path => {
-                // 为每个路径生成唯一的marker ID
-                const endMarkerId = `arrowhead-end-${path.id}`
-                const startMarkerId = `arrowhead-start-${path.id}`
-
-                if (path.label && path.labelX !== undefined && path.labelY !== undefined && path.labelAngle !== undefined) {
-                  return svg`
-                    <path
-                      class="relationship-path"
-                      d=${path.d}
-                      data-rel-id=${path.id}
-                      stroke=${path.color}
-                      marker-end=${`url(#${endMarkerId})`}
-                      marker-start=${`url(#${startMarkerId})`}
-                      @mouseenter=${this.handleHighlightMouseEnter}
-                      @mouseleave=${this.handleHighlightMouseLeave}
-                      @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
-                    ></path>
-                    <text
-                      class="relationship-label"
-                      x=${path.labelX}
-                      y=${path.labelY}
-                      fill=${path.color}
-                      transform=${`rotate(${path.labelAngle} ${path.labelX} ${path.labelY})`}
-                      @mouseenter=${this.handleHighlightMouseEnter}
-                      @mouseleave=${this.handleHighlightMouseLeave}
-                      @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
-                    >${path.label}</text>
-                  `
-                }
-                return svg`
-                  <path
-                    class="relationship-path"
-                    d=${path.d}
-                    data-rel-id=${path.id}
-                    stroke=${path.color}
-                    marker-end=${`url(#${endMarkerId})`}
-                    marker-start=${`url(#${startMarkerId})`}
-                    @mouseenter=${this.handleHighlightMouseEnter}
-                    @mouseleave=${this.handleHighlightMouseLeave}
-                    @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
-                  ></path>
-                `
-              })}
-              ${this.tempRelationshipPath
-                ? svg`<path
-                  class="relationship-path temp-relationship-path"
-                  d=${this.tempRelationshipPath.d}
-                  stroke="#c12c1f"
-                  stroke-dasharray="5,5"
-                  opacity="0.6"
-                ></path>`
-                : null}
+              ${this._renderRelationshipSVG()}
             </svg>
 
             <!-- 虚拟列表层 （标注节点层） -->
