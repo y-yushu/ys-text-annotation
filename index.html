@@ -17,7 +17,38 @@
   </head>
   <body>
     <div class="container">
-      <ys-text-annotation></ys-text-annotation>
+      <ys-text-annotation id="annotation-component"></ys-text-annotation>
     </div>
+    <script type="module">
+      import { mockContent, mockAnnotation, mockRelationship, defaultAnnotationTypes, defaultRelationshipTypes } from '/src/mock/index.ts'
+
+      // 等待组件加载完成
+      window.addEventListener('DOMContentLoaded', () => {
+        const component = document.getElementById('annotation-component')
+        if (component) {
+          // 使用统一初始化方法
+          component.init({
+            content: mockContent,
+            annotationType: defaultAnnotationTypes,
+            relationshipType: defaultRelationshipTypes
+          })
+
+          component.setData({
+            annotations: mockAnnotation,
+            relationships: mockRelationship
+          })
+
+          const data = component.getData()
+          console.log('🚀 ~ 初始化数据:', data)
+
+          // 监听数据变化事件
+          component.addEventListener('data-change', e => {
+            console.log('📢 数据变化了:', e.detail)
+            console.log('  - annotations:', e.detail.annotations)
+            console.log('  - relationships:', e.detail.relationships)
+          })
+        }
+      })
+    </script>
   </body>
 </html>

@@ -1,6 +1,5 @@
 import { LitElement, css, html, svg, unsafeCSS } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
-import { mockContent } from './mock'
 import styles from './index.css?inline'
 import VirtualCore from './VirtualCore'
 import type { HeightUpdate } from './VirtualCore'
@@ -35,20 +34,14 @@ import type {
   RelationshipPath,
   SelectedTextInfo,
   ContextMenuTarget,
-  RelationshipType
+  RelationshipType,
+  DataChangeEventDetail,
+  AnnotationEventDetail,
+  AnnotationDeleteEventDetail,
+  RelationshipEventDetail,
+  RelationshipDeleteEventDetail
 } from './types'
-import {
-  mockAnnotation,
-  mockRelationship,
-  defaultAnnotationTypes,
-  defaultRelationshipTypes,
-  FunctionMode,
-  LayerDisplayMode,
-  type FunctionModeType,
-  type LayerDisplayModeType
-} from './types'
-
-// FIXME aside滚动还是有问题
+import { FunctionMode, LayerDisplayMode, type FunctionModeType, type LayerDisplayModeType } from './types'
 
 @customElement('ys-text-annotation')
 export class YsTextAnnotation extends LitElement {
@@ -56,8 +49,8 @@ export class YsTextAnnotation extends LitElement {
     ${unsafeCSS(styles)}
   `
 
-  @property()
-  content = mockContent
+  @property({ type: String })
+  content = ''
 
   // 是否启用编辑
   @property({ type: Boolean })
@@ -103,17 +96,17 @@ export class YsTextAnnotation extends LitElement {
   @state()
   private virtualTotalHeight = 0
 
-  @state()
-  private annotationType: AnnotationType[] = defaultAnnotationTypes
+  @property({ type: Array })
+  annotationType: AnnotationType[] = []
 
-  @state()
-  private relationshipType: RelationshipType[] = defaultRelationshipTypes
+  @property({ type: Array })
+  relationshipType: RelationshipType[] = []
 
-  @state()
-  private annotations: AnnotationItem[] = mockAnnotation
+  @property({ type: Array })
+  annotations: AnnotationItem[] = []
 
-  @state()
-  private relationships: RelationshipItem[] = mockRelationship
+  @property({ type: Array })
+  relationships: RelationshipItem[] = []
 
   @state()
   private relationshipPaths: RelationshipPath[] = []
@@ -287,6 +280,58 @@ export class YsTextAnnotation extends LitElement {
     this.cancelRelationshipCreation()
   }
 
+  /**
+   * 统一初始化方法
+   * @param config 配置对象
+   */
+  init(config: {
+    content?: string
+    annotations?: AnnotationItem[]
+    relationships?: RelationshipItem[]
+    annotationType?: AnnotationType[]
+    relationshipType?: RelationshipType[]
+  }) {
+    // 批量设置属性，避免多次触发 updated
+    if (config.content !== undefined) {
+      this.content = config.content
+    }
+    if (config.annotationType !== undefined) {
+      this.annotationType = config.annotationType
+    }
+    if (config.relationshipType !== undefined) {
+      this.relationshipType = config.relationshipType
+    }
+    if (config.annotations !== undefined) {
+      this.annotations = config.annotations
+    }
+    if (config.relationships !== undefined) {
+      this.relationships = config.relationships
+    }
+  }
+
+  /**
+   * 设置选中项
+   * @param config 配置对象
+   */
+  setData(config: { annotations?: AnnotationItem[]; relationships?: RelationshipItem[] }) {
+    if (config.annotations !== undefined) {
+      this.annotations = config.annotations
+    }
+    if (config.relationships !== undefined) {
+      this.relationships = config.relationships
+    }
+  }
+
+  /**
+   * 获取最终结果
+   */
+  getData() {
+    return {
+      node: this.annotations || [],
+      line: this.relationships || []
+    }
+  }
+
   updated(changedProperties: Map<string | number | symbol, unknown>) {
     super.updated(changedProperties)
     // 当 content 属性从外部改变时，更新 lines
@@ -314,6 +359,11 @@ export class YsTextAnnotation extends LitElement {
       this.updateGroupedAnnotations()
     }
 
+    // 当 annotations 或 relationships 变化时，派发数据变化事件
+    if (changedProperties.has('annotations') || changedProperties.has('relationships')) {
+      this.dispatchDataChangeEvent()
+    }
+
     if (
       changedProperties.has('visibleStartIndex') ||
       changedProperties.has('visibleEndIndex') ||
@@ -330,6 +380,22 @@ export class YsTextAnnotation extends LitElement {
         this.measureAndUpdateHeights()
       })
     }
+  }
+
+  /**
+   * 派发数据变化事件
+   */
+  private dispatchDataChangeEvent() {
+    this.dispatchEvent(
+      new CustomEvent<DataChangeEventDetail>('data-change', {
+        detail: {
+          annotations: this.annotations,
+          relationships: this.relationships
+        },
+        bubbles: true,
+        composed: true
+      })
+    )
   }
 
   firstUpdated() {
@@ -1422,6 +1488,164 @@ export class YsTextAnnotation extends LitElement {
   }
 
   /**
+   * 渲染关系SVG层
+   */
+  private _renderRelationshipSVG() {
+    return svg`
+      <defs>
+        ${this.relationshipPaths.map(path => {
+          // 为每个路径生成唯一的marker ID
+          const endMarkerId = `arrowhead-end-${path.id}`
+          const startMarkerId = `arrowhead-start-${path.id}`
+
+          return svg`
+            <marker
+              id=${endMarkerId}
+              markerWidth="6"
+              markerHeight="6"
+              refX="3"
+              refY="3"
+              orient="auto"
+            >
+              <circle 
+                cx="3" 
+                cy="3" 
+                r="2.5" 
+                fill="none" 
+                stroke=${path.color}
+                stroke-width="1.5"
+              />
+            </marker>
+            <marker
+              id=${startMarkerId}
+              markerWidth="10"
+              markerHeight="10"
+              refX="1"
+              refY="3"
+              orient="auto"
+            >
+              <circle cx="3" cy="3" r="2.5" fill=${path.color} />
+            </marker>
+          `
+        })}
+      </defs>
+      ${this.relationshipPaths.map(path => {
+        // 为每个路径生成唯一的marker ID
+        const endMarkerId = `arrowhead-end-${path.id}`
+        const startMarkerId = `arrowhead-start-${path.id}`
+
+        if (path.label && path.labelX !== undefined && path.labelY !== undefined && path.labelAngle !== undefined) {
+          return svg`
+            <path
+              class="relationship-path"
+              d=${path.d}
+              data-rel-id=${path.id}
+              stroke=${path.color}
+              marker-end=${`url(#${endMarkerId})`}
+              marker-start=${`url(#${startMarkerId})`}
+              @mouseenter=${this.handleHighlightMouseEnter}
+              @mouseleave=${this.handleHighlightMouseLeave}
+              @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
+            ></path>
+            <text
+              class="relationship-label"
+              x=${path.labelX}
+              y=${path.labelY}
+              fill=${path.color}
+              transform=${`rotate(${path.labelAngle} ${path.labelX} ${path.labelY})`}
+              @mouseenter=${this.handleHighlightMouseEnter}
+              @mouseleave=${this.handleHighlightMouseLeave}
+              @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
+            >${path.label}</text>
+          `
+        }
+        return svg`
+          <path
+            class="relationship-path"
+            d=${path.d}
+            data-rel-id=${path.id}
+            stroke=${path.color}
+            marker-end=${`url(#${endMarkerId})`}
+            marker-start=${`url(#${startMarkerId})`}
+            @mouseenter=${this.handleHighlightMouseEnter}
+            @mouseleave=${this.handleHighlightMouseLeave}
+            @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
+          ></path>
+        `
+      })}
+      ${
+        this.tempRelationshipPath
+          ? svg`<path
+          class="relationship-path temp-relationship-path"
+          d=${this.tempRelationshipPath.d}
+          stroke="#c12c1f"
+          stroke-dasharray="5,5"
+          opacity="0.6"
+        ></path>`
+          : null
+      }
+    `
+  }
+
+  render() {
+    // 引用_currentScrollTop确保滚动时触发SVG重绘
+    void this._currentScrollTop
+    const visibleLines = this.lines.slice(this.visibleStartIndex, this.visibleEndIndex + 1)
+    // 使用 VirtualCore 计算的总高度，回退到预估高度
+    const totalHeight = this.virtualTotalHeight || this.lines.length * this.lineHeight
+    const bottomPadding = getBottomPadding(this.containerHeight)
+    // 使用 VirtualCore 返回的 offset
+    const offsetTop = this.virtualListOffset
+    // 使用实际测量的 virtual-list-layer 高度，初始渲染时使用计算值作为回退
+    const visibleHeight = this.visibleLayerHeight > 0 ? this.visibleLayerHeight : visibleLines.length * this.lineHeight
+
+    return html`
+      <div class="main">
+        <div class="scroll-container" @scroll=${this.handleScroll}>
+          <div class="content-wrapper" style="height: ${totalHeight}px;">
+            <!-- SVG 关系层：与 virtual-list-layer 完全重叠 -->
+            <svg
+              class="relationship-layer ${this.isRelationshipLayerActive ? 'highlighted' : ''} ${this.isSelectingText ? 'selecting-text' : ''}"
+              style="transform: translateY(${offsetTop}px); height: ${visibleHeight}px;"
+              overflow="visible"
+            >
+              ${this._renderRelationshipSVG()}
+            </svg>
+
+            <!-- 虚拟列表层 （标注节点层） -->
+            <div class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}" style="transform: translateY(${offsetTop}px)">
+              <!-- 内层包裹，应用 VirtualCore 返回的 offset 偏移 -->
+              <div class="virtual-list-content" style="padding-bottom: ${bottomPadding}px">
+                ${visibleLines.map(
+                  line => html`
+                    <div class="line">
+                      ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
+                      <span class="line-content">${this._renderLineContent(line)}</span>
+                    </div>
+                  `
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右侧aside -->
+        ${this._renderAside()}
+
+        <!-- 编辑层 -->
+        ${this._renderEditLayer()}
+
+        <!-- 右键菜单层 -->
+        ${this._renderContextMenu()}
+      </div>
+    `
+  }
+
+  /**
+   * -------------------------------------------------- 右侧进度总览 --------------------------------------------------
+   */
+
+  /**
    * 处理标注标记点击，显示标注列表
    * @param e 点击事件
    * @param annotations 标注组
@@ -1502,6 +1726,51 @@ export class YsTextAnnotation extends LitElement {
    */
   private closeAnnotationList() {
     this.selectedGroup = null
+  }
+
+  /**
+   * 获取标注在虚拟列表中的相关关系
+   * 只返回另一端标注在虚拟列表渲染范围内的关系
+   * @param annotationId 标注ID
+   * @returns 关系数组，每项包含关系和对应的标注
+   */
+  private getVisibleRelationships(
+    annotationId: string
+  ): Array<{ relationship: RelationshipItem; relatedAnnotation: AnnotationItem; direction: 'start' | 'end' }> {
+    const result: Array<{ relationship: RelationshipItem; relatedAnnotation: AnnotationItem; direction: 'start' | 'end' }> = []
+
+    // 遍历所有关系
+    for (const relationship of this.relationships) {
+      let relatedAnnotationId: string | null = null
+      let direction: 'start' | 'end' | null = null
+
+      // 判断当前标注在关系中的位置
+      if (relationship.startId === annotationId) {
+        relatedAnnotationId = relationship.endId
+        direction = 'end' // 当前标注是起点，关联标注是终点
+      } else if (relationship.endId === annotationId) {
+        relatedAnnotationId = relationship.startId
+        direction = 'start' // 当前标注是终点，关联标注是起点
+      }
+
+      // 如果当前标注不在这个关系中，跳过
+      if (!relatedAnnotationId || !direction) continue
+
+      // 查找关联的标注
+      const relatedAnnotation = this.annotations.find(ann => ann.id === relatedAnnotationId)
+      if (!relatedAnnotation) continue
+
+      // 检查关联标注是否在当前虚拟列表渲染范围内
+      if (relatedAnnotation.lineId >= this.visibleStartIndex && relatedAnnotation.lineId <= this.visibleEndIndex) {
+        result.push({
+          relationship,
+          relatedAnnotation,
+          direction
+        })
+      }
+    }
+
+    return result
   }
 
   /**
@@ -1620,286 +1889,91 @@ export class YsTextAnnotation extends LitElement {
     })
   }
 
-  /**
-   * 渲染关系SVG层
-   */
-  private _renderRelationshipSVG() {
-    return svg`
-      <defs>
-        ${this.relationshipPaths.map(path => {
-          // 为每个路径生成唯一的marker ID
-          const endMarkerId = `arrowhead-end-${path.id}`
-          const startMarkerId = `arrowhead-start-${path.id}`
-
-          return svg`
-            <marker
-              id=${endMarkerId}
-              markerWidth="6"
-              markerHeight="6"
-              refX="3"
-              refY="3"
-              orient="auto"
-            >
-              <circle 
-                cx="3" 
-                cy="3" 
-                r="2.5" 
-                fill="none" 
-                stroke=${path.color}
-                stroke-width="1.5"
-              />
-            </marker>
-            <marker
-              id=${startMarkerId}
-              markerWidth="10"
-              markerHeight="10"
-              refX="1"
-              refY="3"
-              orient="auto"
-            >
-              <circle cx="3" cy="3" r="2.5" fill=${path.color} />
-            </marker>
-          `
-        })}
-      </defs>
-      ${this.relationshipPaths.map(path => {
-        // 为每个路径生成唯一的marker ID
-        const endMarkerId = `arrowhead-end-${path.id}`
-        const startMarkerId = `arrowhead-start-${path.id}`
-
-        if (path.label && path.labelX !== undefined && path.labelY !== undefined && path.labelAngle !== undefined) {
-          return svg`
-            <path
-              class="relationship-path"
-              d=${path.d}
-              data-rel-id=${path.id}
-              stroke=${path.color}
-              marker-end=${`url(#${endMarkerId})`}
-              marker-start=${`url(#${startMarkerId})`}
-              @mouseenter=${this.handleHighlightMouseEnter}
-              @mouseleave=${this.handleHighlightMouseLeave}
-              @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
-            ></path>
-            <text
-              class="relationship-label"
-              x=${path.labelX}
-              y=${path.labelY}
-              fill=${path.color}
-              transform=${`rotate(${path.labelAngle} ${path.labelX} ${path.labelY})`}
-              @mouseenter=${this.handleHighlightMouseEnter}
-              @mouseleave=${this.handleHighlightMouseLeave}
-              @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
-            >${path.label}</text>
-          `
-        }
-        return svg`
-          <path
-            class="relationship-path"
-            d=${path.d}
-            data-rel-id=${path.id}
-            stroke=${path.color}
-            marker-end=${`url(#${endMarkerId})`}
-            marker-start=${`url(#${startMarkerId})`}
-            @mouseenter=${this.handleHighlightMouseEnter}
-            @mouseleave=${this.handleHighlightMouseLeave}
-            @contextmenu=${(e: MouseEvent) => this.handleRelationshipContextMenu(e, path.id)}
-          ></path>
+  private _renderAside() {
+    return html` <div class="aside-container">
+      ${this.groupedAnnotations.map(
+        group => html`
+          <div
+            class="annotation-marker ${group.annotations.length > 1 ? 'merged' : ''} ${this.selectedGroup?.positionPercent === group.positionPercent
+              ? 'selected'
+              : ''}"
+            style="top: ${group.positionPercent}%; background-color: ${getGroupColor(group.annotations, this.annotationType)};"
+            title="${getGroupTooltip(group.annotations)}"
+            @click=${(e: MouseEvent) => this.handleMarkerClick(e, group.annotations, group.positionPercent)}
+          >
+            <span class="annotation-marker-count">${group.annotations.length}</span>
+          </div>
         `
-      })}
-      ${
-        this.tempRelationshipPath
-          ? svg`<path
-          class="relationship-path temp-relationship-path"
-          d=${this.tempRelationshipPath.d}
-          stroke="#c12c1f"
-          stroke-dasharray="5,5"
-          opacity="0.6"
-        ></path>`
-          : null
-      }
-    `
-  }
+      )}
+      ${this.selectedGroup
+        ? html`
+            <div class="annotation-list-popup" style="left: ${this.selectedGroup.markerPosition.x}px; top: ${this.selectedGroup.markerPosition.y}px;">
+              <div class="annotation-list-header">
+                <span class="annotation-list-title">标注列表 (${this.selectedGroup.annotations.length})</span>
+                <button class="annotation-list-close" @click=${() => this.closeAnnotationList()} title="关闭">×</button>
+              </div>
+              <div class="annotation-list-content">
+                ${this.selectedGroup.annotations
+                  .sort((a, b) => a.lineId - b.lineId)
+                  .map(annotation => {
+                    // 获取该标注在虚拟列表中的相关关系
+                    const visibleRelations = this.getVisibleRelationships(annotation.id)
 
-  /**
-   * 获取标注在虚拟列表中的相关关系
-   * 只返回另一端标注在虚拟列表渲染范围内的关系
-   * @param annotationId 标注ID
-   * @returns 关系数组，每项包含关系和对应的标注
-   */
-  private getVisibleRelationships(
-    annotationId: string
-  ): Array<{ relationship: RelationshipItem; relatedAnnotation: AnnotationItem; direction: 'start' | 'end' }> {
-    const result: Array<{ relationship: RelationshipItem; relatedAnnotation: AnnotationItem; direction: 'start' | 'end' }> = []
+                    return html`
+                      <div class="annotation-list-item-wrapper">
+                        <div
+                          class="annotation-list-item"
+                          title="点击跳转到行号 ${annotation.lineId + 1}"
+                          @click=${() => this.jumpToAnnotation(annotation)}
+                        >
+                          <div class="annotation-list-item-line">
+                            <span class="annotation-list-line-number">${annotation.lineId + 1}</span>
+                            <span class="annotation-list-type" style="background-color: ${getAnnotationColor(annotation, this.annotationType)};"
+                              >${annotation.type}</span
+                            >
+                          </div>
+                          <div class="annotation-list-item-content">${annotation.content}</div>
+                          ${annotation.description ? html`<div class="annotation-list-item-desc">${annotation.description}</div>` : null}
+                        </div>
 
-    // 遍历所有关系
-    for (const relationship of this.relationships) {
-      let relatedAnnotationId: string | null = null
-      let direction: 'start' | 'end' | null = null
-
-      // 判断当前标注在关系中的位置
-      if (relationship.startId === annotationId) {
-        relatedAnnotationId = relationship.endId
-        direction = 'end' // 当前标注是起点，关联标注是终点
-      } else if (relationship.endId === annotationId) {
-        relatedAnnotationId = relationship.startId
-        direction = 'start' // 当前标注是终点，关联标注是起点
-      }
-
-      // 如果当前标注不在这个关系中，跳过
-      if (!relatedAnnotationId || !direction) continue
-
-      // 查找关联的标注
-      const relatedAnnotation = this.annotations.find(ann => ann.id === relatedAnnotationId)
-      if (!relatedAnnotation) continue
-
-      // 检查关联标注是否在当前虚拟列表渲染范围内
-      if (relatedAnnotation.lineId >= this.visibleStartIndex && relatedAnnotation.lineId <= this.visibleEndIndex) {
-        result.push({
-          relationship,
-          relatedAnnotation,
-          direction
-        })
-      }
-    }
-
-    return result
-  }
-
-  render() {
-    // 引用_currentScrollTop确保滚动时触发SVG重绘
-    void this._currentScrollTop
-    const visibleLines = this.lines.slice(this.visibleStartIndex, this.visibleEndIndex + 1)
-    // 使用 VirtualCore 计算的总高度，回退到预估高度
-    const totalHeight = this.virtualTotalHeight || this.lines.length * this.lineHeight
-    const bottomPadding = getBottomPadding(this.containerHeight)
-    // 使用 VirtualCore 返回的 offset
-    const offsetTop = this.virtualListOffset
-    // 使用实际测量的 virtual-list-layer 高度，初始渲染时使用计算值作为回退
-    const visibleHeight = this.visibleLayerHeight > 0 ? this.visibleLayerHeight : visibleLines.length * this.lineHeight
-
-    return html`
-      <div class="main">
-        <div class="scroll-container" @scroll=${this.handleScroll}>
-          <div class="content-wrapper" style="height: ${totalHeight}px;">
-            <!-- SVG 关系层：与 virtual-list-layer 完全重叠 -->
-            <svg
-              class="relationship-layer ${this.isRelationshipLayerActive ? 'highlighted' : ''} ${this.isSelectingText ? 'selecting-text' : ''}"
-              style="transform: translateY(${offsetTop}px); height: ${visibleHeight}px;"
-              overflow="visible"
-            >
-              ${this._renderRelationshipSVG()}
-            </svg>
-
-            <!-- 虚拟列表层 （标注节点层） -->
-            <div class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}" style="transform: translateY(${offsetTop}px)">
-              <!-- 内层包裹，应用 VirtualCore 返回的 offset 偏移 -->
-              <div class="virtual-list-content" style="padding-bottom: ${bottomPadding}px">
-                ${visibleLines.map(
-                  line => html`
-                    <div class="line">
-                      ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
-                      <span class="line-content">${this._renderLineContent(line)}</span>
-                    </div>
-                  `
-                )}
+                        ${visibleRelations.length > 0
+                          ? html`
+                              <div class="annotation-list-relations">
+                                ${visibleRelations.map(
+                                  ({ relationship, relatedAnnotation, direction }) => html`
+                                    <div class="annotation-list-relation-item">
+                                      <div class="annotation-list-relation-arrow" style="color: ${relationship.color || '#c12c1f'};">
+                                        ${direction === 'end' ? '→' : '←'}
+                                      </div>
+                                      <div class="annotation-list-relation-info">
+                                        ${relationship.type
+                                          ? html`<span class="annotation-list-relation-type" style="color: ${relationship.color || '#c12c1f'};"
+                                              >${relationship.type}</span
+                                            >`
+                                          : null}
+                                        <div class="annotation-list-relation-target">
+                                          <span class="annotation-list-relation-line-number">${relatedAnnotation.lineId + 1}</span>
+                                          <span
+                                            class="annotation-list-relation-content"
+                                            style="border-left-color: ${getAnnotationColor(relatedAnnotation, this.annotationType)};"
+                                            >${relatedAnnotation.content}</span
+                                          >
+                                        </div>
+                                      </div>
+                                    </div>
+                                  `
+                                )}
+                              </div>
+                            `
+                          : null}
+                      </div>
+                    `
+                  })}
               </div>
             </div>
-          </div>
-        </div>
-
-        <!-- 右侧aside -->
-        <div class="aside-container">
-          ${this.groupedAnnotations.map(
-            group => html`
-              <div
-                class="annotation-marker ${group.annotations.length > 1 ? 'merged' : ''} ${this.selectedGroup?.positionPercent === group.positionPercent
-                  ? 'selected'
-                  : ''}"
-                style="top: ${group.positionPercent}%; background-color: ${getGroupColor(group.annotations, this.annotationType)};"
-                title="${getGroupTooltip(group.annotations)}"
-                @click=${(e: MouseEvent) => this.handleMarkerClick(e, group.annotations, group.positionPercent)}
-              >
-                <span class="annotation-marker-count">${group.annotations.length}</span>
-              </div>
-            `
-          )}
-          ${this.selectedGroup
-            ? html`
-                <div class="annotation-list-popup" style="left: ${this.selectedGroup.markerPosition.x}px; top: ${this.selectedGroup.markerPosition.y}px;">
-                  <div class="annotation-list-header">
-                    <span class="annotation-list-title">标注列表 (${this.selectedGroup.annotations.length})</span>
-                    <button class="annotation-list-close" @click=${() => this.closeAnnotationList()} title="关闭">×</button>
-                  </div>
-                  <div class="annotation-list-content">
-                    ${this.selectedGroup.annotations
-                      .sort((a, b) => a.lineId - b.lineId)
-                      .map(annotation => {
-                        // 获取该标注在虚拟列表中的相关关系
-                        const visibleRelations = this.getVisibleRelationships(annotation.id)
-
-                        return html`
-                          <div class="annotation-list-item-wrapper">
-                            <div
-                              class="annotation-list-item"
-                              title="点击跳转到行号 ${annotation.lineId + 1}"
-                              @click=${() => this.jumpToAnnotation(annotation)}
-                            >
-                              <div class="annotation-list-item-line">
-                                <span class="annotation-list-line-number">${annotation.lineId + 1}</span>
-                                <span class="annotation-list-type" style="background-color: ${getAnnotationColor(annotation, this.annotationType)};"
-                                  >${annotation.type}</span
-                                >
-                              </div>
-                              <div class="annotation-list-item-content">${annotation.content}</div>
-                              ${annotation.description ? html`<div class="annotation-list-item-desc">${annotation.description}</div>` : null}
-                            </div>
-
-                            ${visibleRelations.length > 0
-                              ? html`
-                                  <div class="annotation-list-relations">
-                                    ${visibleRelations.map(
-                                      ({ relationship, relatedAnnotation, direction }) => html`
-                                        <div class="annotation-list-relation-item">
-                                          <div class="annotation-list-relation-arrow" style="color: ${relationship.color || '#c12c1f'};">
-                                            ${direction === 'end' ? '→' : '←'}
-                                          </div>
-                                          <div class="annotation-list-relation-info">
-                                            ${relationship.type
-                                              ? html`<span class="annotation-list-relation-type" style="color: ${relationship.color || '#c12c1f'};"
-                                                  >${relationship.type}</span
-                                                >`
-                                              : null}
-                                            <div class="annotation-list-relation-target">
-                                              <span class="annotation-list-relation-line-number">${relatedAnnotation.lineId + 1}</span>
-                                              <span
-                                                class="annotation-list-relation-content"
-                                                style="border-left-color: ${getAnnotationColor(relatedAnnotation, this.annotationType)};"
-                                                >${relatedAnnotation.content}</span
-                                              >
-                                            </div>
-                                          </div>
-                                        </div>
-                                      `
-                                    )}
-                                  </div>
-                                `
-                              : null}
-                          </div>
-                        `
-                      })}
-                  </div>
-                </div>
-              `
-            : null}
-        </div>
-
-        <!-- 编辑层 -->
-        ${this._renderEditLayer()}
-
-        <!-- 右键菜单层 -->
-        ${this._renderContextMenu()}
-      </div>
-    `
+          `
+        : null}
+    </div>`
   }
 
   /**
@@ -2035,7 +2109,7 @@ export class YsTextAnnotation extends LitElement {
   }
 
   // 渲染 -- 编辑层
-  _renderEditLayer() {
+  private _renderEditLayer() {
     return html`${this.editLayerVisible
       ? html`<div class="edit-layer" style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;">
           ${this.isEditingRelationship
@@ -2297,7 +2371,7 @@ export class YsTextAnnotation extends LitElement {
   }
 
   // 渲染 -- 右键菜单
-  _renderContextMenu() {
+  private _renderContextMenu() {
     return html`${this.contextMenuVisible
       ? (() => {
           // 获取当前右键的标注信息（用于显示按钮文本）
@@ -2348,5 +2422,15 @@ export class YsTextAnnotation extends LitElement {
 declare global {
   interface HTMLElementTagNameMap {
     'ys-text-annotation': YsTextAnnotation
+  }
+
+  interface HTMLElementEventMap {
+    'data-change': CustomEvent<DataChangeEventDetail>
+    'annotation-added': CustomEvent<AnnotationEventDetail>
+    'annotation-updated': CustomEvent<AnnotationEventDetail>
+    'annotation-deleted': CustomEvent<AnnotationDeleteEventDetail>
+    'relationship-added': CustomEvent<RelationshipEventDetail>
+    'relationship-updated': CustomEvent<RelationshipEventDetail>
+    'relationship-deleted': CustomEvent<RelationshipDeleteEventDetail>
   }
 }
