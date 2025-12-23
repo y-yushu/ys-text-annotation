@@ -1,11 +1,22 @@
 {
   "name": "ys-text-annotation",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
+  "main": "./dist/ys-text-annotation.js",
+  "module": "./dist/ys-text-annotation.js",
+  "types": "./dist/ys-text-annotation.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/ys-text-annotation.d.ts",
+      "import": "./dist/ys-text-annotation.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -15,6 +26,19 @@
     "prettier": "^3.0.0",
     "prettier-plugin-tailwindcss": "^0.6.0",
     "typescript": "~5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vite-plugin-dts": "^4.5.4"
+  },
+  "keywords": [
+    "web-components",
+    "lit",
+    "text-annotation",
+    "annotation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/y-yushu/ys-text-annotation.git"
   }
 }
