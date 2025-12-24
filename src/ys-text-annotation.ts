@@ -1,5 +1,5 @@
 import { LitElement, css, html, svg, unsafeCSS } from 'lit'
-import { customElement, property, state } from 'lit/decorators.js'
+import { customElement, property, state, query } from 'lit/decorators.js'
 import styles from './index.css?inline'
 import VirtualCore from './VirtualCore'
 import type { HeightUpdate } from './VirtualCore'
@@ -76,6 +76,25 @@ export class YsTextAnnotation extends LitElement {
 
   @state()
   private containerHeight = 0
+
+  // ==================== 固定渲染元素 ====================
+  @query('.main')
+  private mainContainer!: HTMLElement
+
+  @query('.scroll-container')
+  private scrollContainer!: HTMLElement
+
+  @query('.content-wrapper')
+  private contentWrapper!: HTMLElement
+
+  @query('.virtual-list-layer')
+  private virtualListLayer!: HTMLElement
+
+  @query('.virtual-list-content')
+  private virtualListContent!: HTMLElement
+
+  @query('.aside-container')
+  private asideContainer!: HTMLElement
 
   // ==================== 虚拟列表核心 ====================
 
@@ -245,7 +264,6 @@ export class YsTextAnnotation extends LitElement {
   private relationshipClickHandler?: (e: MouseEvent) => void
   private relationshipMoveAnimationFrame?: number
 
-  private scrollContainer?: HTMLElement
   private resizeObserver?: ResizeObserver
   private updateTimer?: number
   private relationshipTimer?: number
@@ -399,7 +417,6 @@ export class YsTextAnnotation extends LitElement {
   }
 
   firstUpdated() {
-    this.scrollContainer = this.shadowRoot?.querySelector('.scroll-container') as HTMLElement
     if (!this.scrollContainer) return
 
     this.scrollContainer.addEventListener('scroll', () => this.handleScroll())
@@ -589,11 +606,7 @@ export class YsTextAnnotation extends LitElement {
   private measureAndUpdateHeights() {
     if (!this.virtualCore || !this.scrollContainer) return
 
-    // 查询 virtual-list-content 内的 line 元素
-    const virtualListContent = this.shadowRoot?.querySelector('.virtual-list-content') as HTMLElement
-    if (!virtualListContent) return
-
-    const lineElements = virtualListContent.querySelectorAll('.line')
+    const lineElements = this.virtualListContent.querySelectorAll('.line')
     const updates: HeightUpdate[] = []
 
     lineElements.forEach((el, i) => {
@@ -719,19 +732,13 @@ export class YsTextAnnotation extends LitElement {
   private measureRelationships() {
     if (!this.scrollContainer) return
 
-    const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
-    const virtualListContent = this.shadowRoot?.querySelector('.virtual-list-content') as HTMLElement
-    const asideContainer = this.shadowRoot?.querySelector('.aside-container') as HTMLElement
-
     // 获取 virtual-list-content 的实际高度，用于同步 SVG 层高度
-    if (virtualListContent) {
-      const actualHeight = virtualListContent.offsetHeight
-      if (actualHeight > 0 && actualHeight !== this.visibleLayerHeight) {
-        this.visibleLayerHeight = actualHeight
-      }
+    const actualHeight = this.virtualListContent.offsetHeight
+    if (actualHeight > 0 && actualHeight !== this.visibleLayerHeight) {
+      this.visibleLayerHeight = actualHeight
     }
 
-    if (!this.shadowRoot || !virtualListLayer || !asideContainer) {
+    if (!this.shadowRoot) {
       this.relationshipPaths = []
       return
     }
@@ -759,7 +766,7 @@ export class YsTextAnnotation extends LitElement {
 
       // 情况1：标注与标注绘制
       if (startElement && endElement) {
-        const connection = calculateAnnotationToAnnotationConnection(startElement, endElement, virtualListLayer)
+        const connection = calculateAnnotationToAnnotationConnection(startElement, endElement, this.virtualListLayer)
         startPos = connection.startPos
         endPos = connection.endPos
         startDirection = connection.startDirection
@@ -768,7 +775,7 @@ export class YsTextAnnotation extends LitElement {
       // 情况2：标注与aside绘制（只存在起点标注）
       else if (startElement && !endElement) {
         // 标注端使用右侧垂直中心点
-        const annotationPoints = calculateAnnotationKeyPoints(startElement, virtualListLayer)
+        const annotationPoints = calculateAnnotationKeyPoints(startElement, this.virtualListLayer)
         startPos = annotationPoints.rightCenter
         startDirection = ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL
 
@@ -776,8 +783,8 @@ export class YsTextAnnotation extends LitElement {
         const endPositionPercent = this.getAnnotationPositionPercent(endId)
         if (endPositionPercent !== null) {
           // 查找对应的标记元素
-          const markerElement = this.findMarkerByPositionPercent(endPositionPercent, asideContainer)
-          const asidePos = calculateAsidePosition(endPositionPercent, this.scrollContainer!, asideContainer, virtualListLayer, markerElement)
+          const markerElement = this.findMarkerByPositionPercent(endPositionPercent, this.asideContainer)
+          const asidePos = calculateAsidePosition(endPositionPercent, this.scrollContainer!, this.asideContainer, this.virtualListLayer, markerElement)
           if (asidePos) {
             endPos = asidePos
             endDirection = ConnectionDirection.LEFT_TO_RIGHT_HORIZONTAL
@@ -790,15 +797,15 @@ export class YsTextAnnotation extends LitElement {
         const startPositionPercent = this.getAnnotationPositionPercent(startId)
         if (startPositionPercent !== null) {
           // 查找对应的标记元素
-          const markerElement = this.findMarkerByPositionPercent(startPositionPercent, asideContainer)
-          const asidePos = calculateAsidePosition(startPositionPercent, this.scrollContainer!, asideContainer, virtualListLayer, markerElement)
+          const markerElement = this.findMarkerByPositionPercent(startPositionPercent, this.asideContainer)
+          const asidePos = calculateAsidePosition(startPositionPercent, this.scrollContainer!, this.asideContainer, this.virtualListLayer, markerElement)
           if (asidePos) {
             startPos = asidePos
             // aside在右侧，标注在左侧，所以从aside出发应该是从右向左
             startDirection = ConnectionDirection.RIGHT_TO_LEFT_HORIZONTAL
 
             // 获取标注的所有关键点
-            const annotationPoints = calculateAnnotationKeyPoints(endElement, virtualListLayer)
+            const annotationPoints = calculateAnnotationKeyPoints(endElement, this.virtualListLayer)
 
             // 根据aside和标注的垂直位置关系，选择合适的终点
             if (asidePos.y < annotationPoints.center.y) {
@@ -893,11 +900,7 @@ export class YsTextAnnotation extends LitElement {
       return
     }
 
-    // 检查选中的文本是否在虚拟列表中
-    const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
-    if (!virtualListLayer) return
-
-    const virtualListLayerRect = virtualListLayer.getBoundingClientRect()
+    const virtualListLayerRect = this.virtualListLayer.getBoundingClientRect()
     const rangeRect = range.getBoundingClientRect()
 
     // 检查选中文本是否在虚拟列表层内
@@ -993,9 +996,6 @@ export class YsTextAnnotation extends LitElement {
   private createRangeFromAnnotation(annotation: AnnotationItem): Range | null {
     if (!this.shadowRoot) return null
 
-    const virtualListLayer = this.shadowRoot.querySelector('.virtual-list-layer') as HTMLElement
-    if (!virtualListLayer) return null
-
     // 检查标注所在的行是否在可视区域内
     if (annotation.lineId < this.visibleStartIndex || annotation.lineId > this.visibleEndIndex) {
       // 如果不在可视区域内，返回 null，将使用右键菜单位置作为回退
@@ -1004,7 +1004,7 @@ export class YsTextAnnotation extends LitElement {
 
     // 找到对应的行元素
     const lineIndexInView = annotation.lineId - this.visibleStartIndex
-    const lineElements = virtualListLayer.querySelectorAll('.line')
+    const lineElements = this.virtualListLayer.querySelectorAll('.line')
     const lineElement = lineElements[lineIndexInView] as HTMLElement
     if (!lineElement) return null
 
@@ -1082,12 +1082,6 @@ export class YsTextAnnotation extends LitElement {
   private updateEditLayerPosition() {
     if (!this.scrollContainer) return
 
-    const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-    if (!contentWrapper) return
-
-    const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
-    if (!mainContainer) return
-
     // 编辑模式：不需要重新定位，编辑层位置在初始化时已设置
     // 编辑标注时，编辑层位置固定，不随滚动改变
     if (this.editingAnnotationId) {
@@ -1096,7 +1090,7 @@ export class YsTextAnnotation extends LitElement {
 
     // 创建模式：使用 Range 重新定位
     if (this.savedRange) {
-      this.editLayerPosition = calculateEditLayerPosition(this.savedRange, this.scrollContainer, contentWrapper, mainContainer)
+      this.editLayerPosition = calculateEditLayerPosition(this.savedRange, this.scrollContainer, this.contentWrapper, this.mainContainer)
     }
   }
 
@@ -1120,10 +1114,7 @@ export class YsTextAnnotation extends LitElement {
     // 重置文本选择状态，确保右键菜单可以正常显示
     this.isSelectingText = false
 
-    const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
-    if (!mainContainer) return
-
-    this.contextMenuPosition = calculateContextMenuPosition(e, mainContainer, this.scrollContainer)
+    this.contextMenuPosition = calculateContextMenuPosition(e, this.mainContainer, this.scrollContainer)
 
     this.contextMenuTarget = {
       type: 'relationship',
@@ -1144,15 +1135,12 @@ export class YsTextAnnotation extends LitElement {
     // 确保 annotationId 不包含 'anno-' 前缀（统一格式）
     const normalizedAnnotationId = annotationId.replace(/^anno-/, '')
 
-    const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
-    if (!virtualListLayer) return
-
     // 查找起点标注元素
     const startElement = this.shadowRoot?.querySelector(`[data-anno-id="anno-${normalizedAnnotationId}"]`) as HTMLElement
     if (!startElement) return
 
     // 获取起点位置
-    const startPos = getElementCenterPosition(startElement, virtualListLayer)
+    const startPos = getElementCenterPosition(startElement, this.virtualListLayer)
 
     // 切换到创建关系模式
     this.functionMode = FunctionMode.CREATING_RELATIONSHIP
@@ -1191,10 +1179,7 @@ export class YsTextAnnotation extends LitElement {
   private handleRelationshipMouseMove(e: MouseEvent) {
     if (!this.isCreatingRelationship || !this.tempRelationshipPath || !this.scrollContainer) return
 
-    const virtualListLayer = this.shadowRoot?.querySelector('.virtual-list-layer') as HTMLElement
-    if (!virtualListLayer) return
-
-    const layerRect = virtualListLayer.getBoundingClientRect()
+    const layerRect = this.virtualListLayer.getBoundingClientRect()
     const mouseX = e.clientX - layerRect.left
     const mouseY = e.clientY - layerRect.top
 
@@ -1657,12 +1642,10 @@ export class YsTextAnnotation extends LitElement {
 
     // 获取标记元素的位置
     const markerElement = e.currentTarget as HTMLElement
-    const asideContainer = markerElement.closest('.aside-container') as HTMLElement
-    if (!asideContainer) return
 
     // 获取标记和容器的实际屏幕位置
     const markerRect = markerElement.getBoundingClientRect()
-    const containerRect = asideContainer.getBoundingClientRect()
+    const containerRect = this.asideContainer.getBoundingClientRect()
 
     // 计算弹窗位置：相对于 aside-container
     const popupWidth = 300 // 弹窗宽度
@@ -2170,9 +2153,7 @@ export class YsTextAnnotation extends LitElement {
 
     // 重置文本选择状态，确保右键菜单可以正常显示
     this.isSelectingText = false
-    const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
-    if (!mainContainer) return
-    this.contextMenuPosition = calculateContextMenuPosition(e, mainContainer, this.scrollContainer)
+    this.contextMenuPosition = calculateContextMenuPosition(e, this.mainContainer, this.scrollContainer)
     this.contextMenuTarget = { type: 'annotation', id: annotationId }
 
     // 切换到右键菜单模式
@@ -2283,24 +2264,17 @@ export class YsTextAnnotation extends LitElement {
 
     // 尝试根据标注信息创建 Range 对象，使用和新建标注相同的位置计算逻辑
     if (this.scrollContainer) {
-      const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-      const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
-      if (contentWrapper && mainContainer) {
-        // 尝试根据标注信息创建 Range
-        const range = this.createRangeFromAnnotation(annotation)
-        if (range) {
-          // 如果成功创建 Range，使用和新建标注相同的位置计算逻辑
-          this.editLayerPosition = calculateEditLayerPosition(range, this.scrollContainer, contentWrapper, mainContainer)
-          // 保存 Range，以便后续可能需要使用
-          this.savedRange = range
-        } else {
-          // 如果无法创建 Range（例如标注不在可视区域内），回退到使用右键菜单位置
-          const menuPosition = { ...this.contextMenuPosition }
-          this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper, mainContainer)
-        }
+      // 尝试根据标注信息创建 Range
+      const range = this.createRangeFromAnnotation(annotation)
+      if (range) {
+        // 如果成功创建 Range，使用和新建标注相同的位置计算逻辑
+        this.editLayerPosition = calculateEditLayerPosition(range, this.scrollContainer, this.contentWrapper, this.mainContainer)
+        // 保存 Range，以便后续可能需要使用
+        this.savedRange = range
       } else {
-        // 如果没有 contentWrapper 或 mainContainer，使用右键菜单位置
-        this.editLayerPosition = { ...this.contextMenuPosition }
+        // 如果无法创建 Range（例如标注不在可视区域内），回退到使用右键菜单位置
+        const menuPosition = { ...this.contextMenuPosition }
+        this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, this.contentWrapper, this.mainContainer)
       }
     } else {
       // 如果没有 scrollContainer，使用右键菜单位置
@@ -2335,13 +2309,7 @@ export class YsTextAnnotation extends LitElement {
 
     // 使用工具函数计算编辑层位置，确保在可视范围内
     if (this.scrollContainer) {
-      const contentWrapper = this.shadowRoot?.querySelector('.content-wrapper') as HTMLElement
-      const mainContainer = this.shadowRoot?.querySelector('.main') as HTMLElement
-      if (contentWrapper && mainContainer) {
-        this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, contentWrapper, mainContainer)
-      } else {
-        this.editLayerPosition = menuPosition
-      }
+      this.editLayerPosition = calculateEditLayerPositionFromPoint(menuPosition, this.scrollContainer, this.contentWrapper, this.mainContainer)
     } else {
       this.editLayerPosition = menuPosition
     }
