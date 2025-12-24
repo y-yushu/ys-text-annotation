@@ -72,7 +72,7 @@ export class YsTextAnnotation extends LitElement {
   private visibleEndIndex = 0
 
   @state()
-  private lineHeight = 24
+  private lineHeight = 40
 
   @state()
   private containerHeight = 0

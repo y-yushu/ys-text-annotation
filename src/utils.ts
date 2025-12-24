@@ -572,7 +572,8 @@ export function measureLineHeight(container: HTMLElement): number {
   Object.assign(tempDiv.style, {
     position: 'absolute',
     visibility: 'hidden',
-    height: 'auto'
+    height: 'auto',
+    'line-height': 2.5
   })
   tempDiv.textContent = 'M'
   container.appendChild(tempDiv)
