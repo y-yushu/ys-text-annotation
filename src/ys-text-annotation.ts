@@ -42,22 +42,39 @@ import type {
   AnnotationEventDetail,
   AnnotationDeleteEventDetail,
   RelationshipEventDetail,
-  RelationshipDeleteEventDetail
+  RelationshipDeleteEventDetail,
+  ErrorEventDetail,
+  relationshipTypeResolver,
+  RelationshipTypeFilter,
+  AnnotationValidator,
+  AnnotationConfirmValidator,
+  RelationshipValidator
 } from './types'
 import { FunctionMode, LayerDisplayMode, type FunctionModeType, type LayerDisplayModeType } from './types'
 
 @customElement('ys-text-annotation')
 export class YsTextAnnotation extends LitElement {
-  static styles = css`
-    ${unsafeCSS(styles)}
-  `
-
-  @property({ type: String })
-  content = ''
+  static styles = [
+    css`
+      :host {
+        /* 默认标注颜色 */
+        --default-node-color: #2d0bdf;
+        /* 默认关系颜色 */
+        --default-line-color: #c3427f;
+        font-size: 16px;
+      }
+    `,
+    css`
+      ${unsafeCSS(styles)}
+    `
+  ]
 
   // 是否启用编辑
   @property({ type: Boolean })
-  editingEnabled = true
+  editingEnabled = false
+
+  @property({ type: String })
+  content = ''
 
   // 是否显示行号
   @property({ type: Boolean })
@@ -129,6 +146,44 @@ export class YsTextAnnotation extends LitElement {
 
   @property({ type: Array })
   relationships: RelationshipItem[] = []
+
+  /**
+   * 关系选择器函数
+   * 当创建关系时，会调用此函数来决定使用哪个关系类型
+   * 如果未设置，则使用 relationshipType 数组的第一项作为默认
+   */
+  private relationshipTypeResolver?: relationshipTypeResolver
+
+  /**
+   * 关系类型过滤器函数
+   * 当编辑关系时，会调用此函数来过滤可选的关系类型列表
+   * 如果未设置，则使用所有 relationshipType 作为可选项
+   */
+  private relationshipTypeFilter?: RelationshipTypeFilter
+
+  /**
+   * 标注验证器函数（选中文本阶段）
+   * 在选中文本后、显示编辑层前进行自定义验证
+   * 如果未设置，则不进行验证
+   * 返回 { valid: false } 可阻止显示编辑层
+   */
+  private annotationValidator?: AnnotationValidator
+
+  /**
+   * 标注确认验证器函数（确认创建阶段）
+   * 在用户选择类型、输入描述后、确认创建前进行自定义验证
+   * 如果未设置，则不进行验证
+   * 返回 { valid: false } 可阻止创建标注
+   */
+  private annotationConfirmValidator?: AnnotationConfirmValidator
+
+  /**
+   * 关系验证器函数
+   * 在创建关系前进行自定义验证
+   * 如果未设置，则不进行验证
+   * 返回 { valid: false } 可阻止创建关系
+   */
+  private relationshipValidator?: RelationshipValidator
 
   @state()
   private relationshipPaths: RelationshipPath[] = []
@@ -243,7 +298,13 @@ export class YsTextAnnotation extends LitElement {
     // - 鼠标移入关系或标注
     // - 开启右键菜单
     // - 开启创建关系功能
-    if (this.isHoveringHighlight || this.functionMode === FunctionMode.CONTEXT_MENU_OPEN || this.functionMode === FunctionMode.CREATING_RELATIONSHIP) {
+    // - 开启编辑层（创建/编辑标注或关系）
+    if (
+      this.isHoveringHighlight ||
+      this.functionMode === FunctionMode.CONTEXT_MENU_OPEN ||
+      this.functionMode === FunctionMode.CREATING_RELATIONSHIP ||
+      this.functionMode === FunctionMode.CREATING_ANNOTATION
+    ) {
       return LayerDisplayMode.HIGHLIGHT_RELATIONSHIP
     }
     return LayerDisplayMode.HIGHLIGHT_VIRTUAL_LIST
@@ -306,12 +367,22 @@ export class YsTextAnnotation extends LitElement {
    * @param config 配置对象
    */
   init(config: {
+    editable?: boolean
     content?: string
     annotations?: AnnotationItem[]
     relationships?: RelationshipItem[]
     annotationType?: AnnotationType[]
     relationshipType?: RelationshipType[]
+    relationshipTypeResolver?: relationshipTypeResolver
+    relationshipTypeFilter?: RelationshipTypeFilter
+    annotationValidator?: AnnotationValidator
+    annotationConfirmValidator?: AnnotationConfirmValidator
+    relationshipValidator?: RelationshipValidator
   }) {
+    // 编辑模式
+    if (config.editable) {
+      this.editingEnabled = config.editable
+    }
     // 批量设置属性，避免多次触发 updated
     if (config.content !== undefined) {
       this.content = config.content
@@ -327,6 +398,26 @@ export class YsTextAnnotation extends LitElement {
     }
     if (config.relationships !== undefined) {
       this.relationships = config.relationships
+    }
+    // 设置关系选择器
+    if (config.relationshipTypeResolver !== undefined) {
+      this.relationshipTypeResolver = config.relationshipTypeResolver
+    }
+    // 设置关系类型过滤器
+    if (config.relationshipTypeFilter !== undefined) {
+      this.relationshipTypeFilter = config.relationshipTypeFilter
+    }
+    // 设置标注验证器
+    if (config.annotationValidator !== undefined) {
+      this.annotationValidator = config.annotationValidator
+    }
+    // 设置标注确认验证器
+    if (config.annotationConfirmValidator !== undefined) {
+      this.annotationConfirmValidator = config.annotationConfirmValidator
+    }
+    // 设置关系验证器
+    if (config.relationshipValidator !== undefined) {
+      this.relationshipValidator = config.relationshipValidator
     }
   }
 
@@ -412,6 +503,27 @@ export class YsTextAnnotation extends LitElement {
         detail: {
           annotations: this.annotations,
           relationships: this.relationships
+        },
+        bubbles: true,
+        composed: true
+      })
+    )
+  }
+
+  /**
+   * 派发错误事件
+   * 用于向外部暴露组件内部的错误信息，让外部用户自行处理错误提示
+   * @param message 错误消息
+   * @param code 错误代码（可选）
+   * @param data 附加数据（可选）
+   */
+  dispatchError(message: string, code?: string, data?: any) {
+    this.dispatchEvent(
+      new CustomEvent<ErrorEventDetail>('error', {
+        detail: {
+          message,
+          code,
+          data
         },
         bubbles: true,
         composed: true
@@ -749,7 +861,7 @@ export class YsTextAnnotation extends LitElement {
     const paths: RelationshipPath[] = []
 
     // 默认颜色
-    const defaultColor = '#c12c1f'
+    const defaultColor = 'var(--default-line-color)'
 
     // 遍历所有关系
     for (const relationship of this.relationships) {
@@ -982,6 +1094,26 @@ export class YsTextAnnotation extends LitElement {
     if (!this.editingEnabled) {
       return
     }
+
+    // 如果设置了标注验证器，调用它进行验证
+    if (this.annotationValidator) {
+      try {
+        const validationResult = this.annotationValidator(selectedTextInfo, this.annotations)
+        // 如果验证失败，阻止创建标注
+        if (!validationResult.valid) {
+          // 派发错误事件，让外部处理错误提示
+          this.dispatchError(validationResult.message || '标注验证失败', 'ANNOTATION_VALIDATION_FAILED', {
+            selectedText: selectedTextInfo
+          })
+          return
+        }
+      } catch (error) {
+        // 如果验证器抛出错误，派发错误事件并阻止创建
+        this.dispatchError('标注验证器执行失败', 'VALIDATOR_ERROR', error)
+        return
+      }
+    }
+
     // 保存选中的文本信息
     this.selectedTextInfo = selectedTextInfo
     // 更新编辑层位置
@@ -1285,15 +1417,93 @@ export class YsTextAnnotation extends LitElement {
     // endAnnotationId 已经在 handleRelationshipClick 中去掉了前缀，但为了安全起见再次确保
     const normalizedEndId = endAnnotationId.replace(/^anno-/, '')
 
-    // 查找默认关系类型
-    const defaultRelationshipType = this.relationshipType[0]
+    // 查找起点和终点标注
+    const startAnnotation = this.annotations.find(ann => ann.id === this.relationshipStartAnnotationId)
+    const endAnnotation = this.annotations.find(ann => ann.id === normalizedEndId)
+
+    // 如果找不到标注，使用降级方案
+    if (!startAnnotation || !endAnnotation) {
+      const defaultRelationshipType = this.relationshipType[0]
+      const newRelationship: RelationshipItem = {
+        id: `rel-${Date.now()}`,
+        startId: this.relationshipStartAnnotationId,
+        endId: normalizedEndId,
+        type: defaultRelationshipType?.type || '',
+        description: '',
+        color: defaultRelationshipType?.color || 'var(--default-line-color)'
+      }
+      this.relationships = [...this.relationships, newRelationship]
+      this.resetToDefaultMode()
+      return
+    }
+
+    // 确定使用的关系类型
+    let selectedRelationshipType: RelationshipType | null = null
+
+    // 如果设置了关系选择器，调用它
+    if (this.relationshipTypeResolver) {
+      try {
+        const result = this.relationshipTypeResolver(startAnnotation, endAnnotation)
+
+        // 如果选择器返回 null，禁止创建关系，恢复到默认状态
+        if (result === null) {
+          this.resetToDefaultMode()
+          return
+        }
+
+        // 处理返回值：可能是 RelationshipType 对象或字符串
+        if (result) {
+          if (typeof result === 'string') {
+            // 如果返回字符串，查找对应的关系类型
+            selectedRelationshipType = this.relationshipType.find(type => type.type === result) || null
+          } else {
+            // 如果返回 RelationshipType 对象，直接使用
+            selectedRelationshipType = result
+          }
+        }
+      } catch (error) {
+        // 如果选择器抛出错误，派发错误事件并使用降级方案
+        this.dispatchError('默认关系选择器执行失败', 'SELECTOR_ERROR', error)
+      }
+    }
+
+    // 降级：如果没有选择器或选择器返回 null，使用第一条关系类型
+    if (!selectedRelationshipType) {
+      selectedRelationshipType = this.relationshipType[0] || null
+    }
+
+    // 如果设置了关系验证器，调用它进行验证
+    if (this.relationshipValidator) {
+      try {
+        const validationResult = this.relationshipValidator(startAnnotation, endAnnotation, this.relationships)
+        // 如果验证失败，阻止创建关系
+        if (!validationResult.valid) {
+          // 派发错误事件，让外部处理错误提示
+          this.dispatchError(validationResult.message || '关系验证失败', 'RELATIONSHIP_VALIDATION_FAILED', {
+            startAnnotation,
+            endAnnotation
+          })
+          // 重置到默认模式
+          this.resetToDefaultMode()
+          return
+        }
+      } catch (error) {
+        // 如果验证器抛出错误，派发错误事件并阻止创建
+        this.dispatchError('关系验证器执行失败', 'VALIDATOR_ERROR', error)
+        // 重置到默认模式
+        this.resetToDefaultMode()
+        return
+      }
+    }
+
+    // 创建新关系
     const newRelationship: RelationshipItem = {
       id: `rel-${Date.now()}`,
-      startId: this.relationshipStartAnnotationId, // 已经在 startRelationshipCreation 中规范化
+      startId: this.relationshipStartAnnotationId,
       endId: normalizedEndId,
-      type: defaultRelationshipType?.type || '',
+      type: selectedRelationshipType?.type || '',
       description: '',
-      color: defaultRelationshipType?.color || '#c12c1f'
+      color: selectedRelationshipType?.color || 'var(--default-line-color)'
     }
 
     this.relationships = [...this.relationships, newRelationship]
@@ -1566,7 +1776,7 @@ export class YsTextAnnotation extends LitElement {
           ? svg`<path
           class="relationship-path temp-relationship-path"
           d=${this.tempRelationshipPath.d}
-          stroke="#c12c1f"
+          stroke="var(--default-line-color)"
           stroke-dasharray="5,5"
           opacity="0.6"
         ></path>`
@@ -1953,7 +2163,7 @@ export class YsTextAnnotation extends LitElement {
                           <div class="annotation-list-relations">
                             ${visibleRelations.map(({ relationship, relatedAnnotation, direction }) => {
                               const arrowStyleMap = styleMap({
-                                color: relationship.color || '#c12c1f'
+                                color: relationship.color || 'var(--default-line-color)'
                               })
                               const leftStyleMap = styleMap({
                                 'border-left-color': getAnnotationColor(relatedAnnotation, this.annotationType)
@@ -2057,7 +2267,7 @@ export class YsTextAnnotation extends LitElement {
       if (relationship) {
         // 查找选中的关系类型对应的颜色
         const selectedTypeObj = this.relationshipType.find(type => type.type === this.selectedRelationshipType)
-        const typeColor = selectedTypeObj?.color || relationship.color || '#c12c1f'
+        const typeColor = selectedTypeObj?.color || relationship.color || 'var(--default-line-color)'
 
         const updatedRelationship: RelationshipItem = {
           ...relationship,
@@ -2080,7 +2290,7 @@ export class YsTextAnnotation extends LitElement {
 
     // 查找选中的类型对应的颜色
     const selectedTypeObj = this.annotationType.find(type => type.type === this.selectedAnnotationType)
-    const typeColor = selectedTypeObj?.color || '#2d0bdf'
+    const typeColor = selectedTypeObj?.color || 'var(--default-node-color)'
 
     const trimmedDescription = this.editInputValue.trim()
 
@@ -2101,10 +2311,8 @@ export class YsTextAnnotation extends LitElement {
       }
       this.annotations = this.annotations.map(ann => (ann.id === updatedAnnotation.id ? updatedAnnotation : ann))
     } else {
-      // 创建模式：创建新标注
-      const newId = `${Date.now()}`
-      const newAnnotation: AnnotationItem = {
-        id: newId,
+      // 创建模式：创建新标注前进行确认验证
+      const newAnnotation: Omit<AnnotationItem, 'id'> = {
         lineId: this.selectedTextInfo.lineId,
         start: this.selectedTextInfo.start,
         end: this.selectedTextInfo.end,
@@ -2113,7 +2321,33 @@ export class YsTextAnnotation extends LitElement {
         description: trimmedDescription,
         color: typeColor
       }
-      this.annotations = [...this.annotations, newAnnotation]
+
+      // 如果设置了标注确认验证器，调用它进行验证
+      if (this.annotationConfirmValidator) {
+        try {
+          const validationResult = this.annotationConfirmValidator(newAnnotation, this.annotations)
+          // 如果验证失败，阻止创建标注
+          if (!validationResult.valid) {
+            // 派发错误事件，让外部处理错误提示
+            this.dispatchError(validationResult.message || '标注确认验证失败', 'ANNOTATION_CONFIRM_VALIDATION_FAILED', {
+              annotation: newAnnotation
+            })
+            return
+          }
+        } catch (error) {
+          // 如果验证器抛出错误，派发错误事件并阻止创建
+          this.dispatchError('标注确认验证器执行失败', 'VALIDATOR_ERROR', error)
+          return
+        }
+      }
+
+      // 验证通过，创建新标注
+      const newId = `${Date.now()}`
+      const finalAnnotation: AnnotationItem = {
+        id: newId,
+        ...newAnnotation
+      }
+      this.annotations = [...this.annotations, finalAnnotation]
     }
 
     // 清除文本选择（使用 Shadow DOM 的选择）
@@ -2130,8 +2364,54 @@ export class YsTextAnnotation extends LitElement {
     this.resetToDefaultMode()
   }
 
+  /**
+   * 获取编辑关系时可选的关系类型列表
+   * 如果设置了 relationshipTypeFilter，使用过滤器筛选；否则返回所有关系类型
+   */
+  private getAvailableRelationshipTypes(): RelationshipType[] {
+    // 如果不是编辑关系模式，返回所有类型
+    if (!this.isEditingRelationship || !this.editingRelationshipId) {
+      return this.relationshipType
+    }
+
+    // 查找正在编辑的关系
+    const relationship = this.relationships.find(rel => rel.id === this.editingRelationshipId)
+    if (!relationship) {
+      return this.relationshipType
+    }
+
+    // 查找起点和终点标注
+    const startAnnotation = this.annotations.find(ann => ann.id === relationship.startId)
+    const endAnnotation = this.annotations.find(ann => ann.id === relationship.endId)
+
+    // 如果找不到标注，返回所有类型
+    if (!startAnnotation || !endAnnotation) {
+      return this.relationshipType
+    }
+
+    // 如果设置了过滤器，使用过滤器筛选
+    if (this.relationshipTypeFilter) {
+      try {
+        const filteredTypes = this.relationshipTypeFilter(relationship, startAnnotation, endAnnotation)
+        // 确保返回的是数组且不为空，否则降级到所有类型
+        if (Array.isArray(filteredTypes) && filteredTypes.length > 0) {
+          return filteredTypes
+        }
+      } catch (error) {
+        // 如果过滤器抛出错误，派发错误事件并降级到所有类型
+        this.dispatchError('关系类型过滤器执行失败', 'FILTER_ERROR', error)
+      }
+    }
+
+    // 降级：返回所有关系类型
+    return this.relationshipType
+  }
+
   // 渲染 -- 编辑层
   private renderEditLayer() {
+    // 获取可用的关系类型列表（仅在编辑关系时使用过滤器）
+    const availableRelationshipTypes = this.getAvailableRelationshipTypes()
+
     return html`${this.editLayerVisible
       ? html`<div
           class="edit-layer"
@@ -2145,7 +2425,7 @@ export class YsTextAnnotation extends LitElement {
                 <select required .value=${this.selectedRelationshipType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
                   <option value="" disabled>选择关系类型</option>
                   ${repeat(
-                    this.relationshipType,
+                    availableRelationshipTypes,
                     type => type.type,
                     type => html`<option value=${type.type} style=${styleMap({ color: type.color })}>${type.type}</option>`
                   )}
@@ -2264,15 +2544,100 @@ export class YsTextAnnotation extends LitElement {
       return
     }
 
-    // 创建关系
-    const defaultRelationshipType = this.relationshipType[0]
+    // 查找起点和终点标注
+    const startAnnotation = this.annotations.find(ann => ann.id === this.remoteAnnotationId)
+    const endAnnotation = this.annotations.find(ann => ann.id === currentAnnotationId)
+
+    // 如果找不到标注，使用降级方案
+    if (!startAnnotation || !endAnnotation) {
+      const defaultRelationshipType = this.relationshipType[0]
+      const newRelationship: RelationshipItem = {
+        id: `rel-${Date.now()}`,
+        startId: this.remoteAnnotationId,
+        endId: currentAnnotationId,
+        type: defaultRelationshipType?.type || '',
+        description: '',
+        color: defaultRelationshipType?.color || 'var(--default-line-color)'
+      }
+      this.relationships = [...this.relationships, newRelationship]
+      this.remoteAnnotationId = null
+      this.resetToDefaultMode()
+      return
+    }
+
+    // 确定使用的关系类型
+    let selectedRelationshipType: RelationshipType | null = null
+
+    // 如果设置了关系选择器，调用它
+    if (this.relationshipTypeResolver) {
+      try {
+        const result = this.relationshipTypeResolver(startAnnotation, endAnnotation)
+
+        // 如果选择器返回 null，禁止创建关系，恢复到默认状态
+        if (result === null) {
+          // 清除远程标注ID
+          this.remoteAnnotationId = null
+          this.resetToDefaultMode()
+          return
+        }
+
+        // 处理返回值：可能是 RelationshipType 对象或字符串
+        if (result) {
+          if (typeof result === 'string') {
+            // 如果返回字符串，查找对应的关系类型
+            selectedRelationshipType = this.relationshipType.find(type => type.type === result) || null
+          } else {
+            // 如果返回 RelationshipType 对象，直接使用
+            selectedRelationshipType = result
+          }
+        }
+      } catch (error) {
+        // 如果选择器抛出错误，派发错误事件并使用降级方案
+        this.dispatchError('关系选择器执行失败', 'SELECTOR_ERROR', error)
+      }
+    }
+
+    // 降级：如果没有选择器或选择器返回 null，使用第一条关系类型
+    if (!selectedRelationshipType) {
+      selectedRelationshipType = this.relationshipType[0] || null
+    }
+
+    // 如果设置了关系验证器，调用它进行验证
+    if (this.relationshipValidator) {
+      try {
+        const validationResult = this.relationshipValidator(startAnnotation, endAnnotation, this.relationships)
+        // 如果验证失败，阻止创建关系
+        if (!validationResult.valid) {
+          // 派发错误事件，让外部处理错误提示
+          this.dispatchError(validationResult.message || '关系验证失败', 'RELATIONSHIP_VALIDATION_FAILED', {
+            startAnnotation,
+            endAnnotation
+          })
+          // 清除远程标注ID
+          this.remoteAnnotationId = null
+          // 重置到默认模式
+          this.resetToDefaultMode()
+          return
+        }
+      } catch (error) {
+        // 如果验证器抛出错误，派发错误事件并阻止创建
+        this.dispatchError('关系验证器执行失败', 'VALIDATOR_ERROR', error)
+        // 清除远程标注ID
+        this.remoteAnnotationId = null
+        // 重置到默认模式
+        this.resetToDefaultMode()
+        return
+      }
+    }
+
+    // 创建新关系
     const newRelationship: RelationshipItem = {
       id: `rel-${Date.now()}`,
-      startId: this.remoteAnnotationId,
+      startId: this.remoteAnnotationId!,
       endId: currentAnnotationId,
-      type: defaultRelationshipType?.type || '',
+      type: selectedRelationshipType?.type || '',
       description: '',
-      color: defaultRelationshipType?.color || '#c12c1f'
+      color: selectedRelationshipType?.color || 'var(--default-line-color)'
     }
 
     this.relationships = [...this.relationships, newRelationship]
@@ -2425,7 +2790,7 @@ export class YsTextAnnotation extends LitElement {
                     ? html`<button class="context-menu-item create-remote-annotation" @click=${this.handleCreateRemoteAnnotation}>
                         记录<span
                           style=${styleMap({
-                            color: currentAnnotation?.color || '#2d0bdf'
+                            color: currentAnnotation?.color || 'var(--default-node-color)'
                           })}
                           >${currentAnnotation?.content || '标注'}</span
                         >
@@ -2435,7 +2800,7 @@ export class YsTextAnnotation extends LitElement {
                       : html`<button class="context-menu-item connect-remote-annotation" @click=${this.handleConnectRemoteAnnotation}>
                           连接<span
                             style=${styleMap({
-                              color: remoteAnnotation?.color || '#2d0bdf'
+                              color: remoteAnnotation?.color || 'var(--default-node-color)'
                             })}
                             >${remoteAnnotation?.content || '标注'}</span
                           >
@@ -2466,5 +2831,6 @@ declare global {
     'relationship-added': CustomEvent<RelationshipEventDetail>
     'relationship-updated': CustomEvent<RelationshipEventDetail>
     'relationship-deleted': CustomEvent<RelationshipDeleteEventDetail>
+    error: CustomEvent<ErrorEventDetail>
   }
 }

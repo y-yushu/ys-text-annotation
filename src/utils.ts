@@ -1,6 +1,5 @@
 // 工具函数集合
 import type { AnnotationItem, AnnotationType } from './types'
-import { VIRTUAL_LIST_CONFIG } from './types'
 
 /**
  * 获取 Shadow DOM 内的选择
@@ -750,7 +749,8 @@ export function getGroupTooltip(annotations: AnnotationItem[]): string {
  * 计算底部填充
  */
 export function getBottomPadding(containerHeight: number): number {
-  return containerHeight * VIRTUAL_LIST_CONFIG.BOTTOM_EXTRA_RATIO
+  const BOTTOM_EXTRA_RATIO = 1 / 3
+  return containerHeight * BOTTOM_EXTRA_RATIO
 }
 
 /**

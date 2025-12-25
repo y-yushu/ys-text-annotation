@@ -40,11 +40,52 @@ export interface LineItem {
   content: string
 }
 
-// 实体标注的类型
+// 实体标注类型
 export interface AnnotationType {
-  type: string
-  color: string
+  type: string // 类型（唯一标识）
+  color: string // 颜色
 }
+
+// 关系类型
+export interface RelationshipType {
+  type: string // 类型（唯一标识）
+  color: string // 颜色
+}
+
+// 关系选择器函数类型
+export type relationshipTypeResolver = (startAnnotation: AnnotationItem, endAnnotation: AnnotationItem) => RelationshipType | string | null
+
+// 关系类型过滤器函数类型
+// 用于编辑关系时，根据当前关系信息过滤可选的关系类型列表
+export type RelationshipTypeFilter = (relationship: RelationshipItem, startAnnotation: AnnotationItem, endAnnotation: AnnotationItem) => RelationshipType[]
+
+// 标注验证器函数类型（选中文本阶段）
+// 用于在选中文本后、显示编辑层前进行自定义验证
+// 返回 { valid: true } 表示验证通过，允许显示编辑层
+// 返回 { valid: false, message?: string } 表示验证失败，阻止显示编辑层，可选的 message 用于错误提示
+export type AnnotationValidator = (
+  selectedText: SelectedTextInfo,
+  existingAnnotations: AnnotationItem[]
+) => { valid: boolean; message?: string }
+
+// 标注确认验证器函数类型（确认创建阶段）
+// 用于在用户选择类型、输入描述后、确认创建前进行自定义验证
+// 返回 { valid: true } 表示验证通过，允许创建标注
+// 返回 { valid: false, message?: string } 表示验证失败，阻止创建标注，可选的 message 用于错误提示
+export type AnnotationConfirmValidator = (
+  annotation: Omit<AnnotationItem, 'id'>,
+  existingAnnotations: AnnotationItem[]
+) => { valid: boolean; message?: string }
+
+// 关系验证器函数类型
+// 用于在创建关系前进行自定义验证
+// 返回 { valid: true } 表示验证通过，允许创建关系
+// 返回 { valid: false, message?: string } 表示验证失败，阻止创建关系，可选的 message 用于错误提示
+export type RelationshipValidator = (
+  startAnnotation: AnnotationItem,
+  endAnnotation: AnnotationItem,
+  existingRelationships: RelationshipItem[]
+) => { valid: boolean; message?: string }
 
 // 实体标注
 export interface AnnotationItem {
@@ -56,11 +97,6 @@ export interface AnnotationItem {
   type: string // 分类
   description: string // 描述
   color?: string // 颜色
-}
-
-export interface RelationshipType {
-  type: string
-  color: string
 }
 
 // 关系
@@ -99,13 +135,6 @@ export interface ContextMenuTarget {
   type: 'annotation' | 'relationship'
   id: string
 }
-
-// 常量配置
-export const VIRTUAL_LIST_CONFIG = {
-  BUFFER_SIZE: 5, // 可见区域缓冲区行数
-  BOTTOM_THRESHOLD: 100, // 底部检测容差（px），增大此值以确保在接近底部时能正确识别
-  BOTTOM_EXTRA_RATIO: 1 / 3 // 底部额外空间比例
-} as const
 
 // ==================== 自定义事件类型 ====================
 
@@ -146,4 +175,13 @@ export interface RelationshipEventDetail {
 export interface RelationshipDeleteEventDetail {
   id: string
   relationship: RelationshipItem
+}
+
+/**
+ * 错误事件详情
+ */
+export interface ErrorEventDetail {
+  message: string
+  code?: string
+  data?: any
 }
