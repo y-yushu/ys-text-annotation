@@ -1,5 +1,8 @@
 import { LitElement, css, html, svg, unsafeCSS } from 'lit'
 import { customElement, property, state, query } from 'lit/decorators.js'
+import { classMap } from 'lit/directives/class-map.js'
+import { styleMap } from 'lit/directives/style-map.js'
+import { repeat } from 'lit/directives/repeat.js'
 import styles from './index.css?inline'
 import VirtualCore from './VirtualCore'
 import type { HeightUpdate } from './VirtualCore'
@@ -1325,7 +1328,7 @@ export class YsTextAnnotation extends LitElement {
   /**
    * 渲染行内容，如果有标注则高亮显示
    */
-  private _renderLineContent(line: LineItem): string | ReturnType<typeof html> {
+  private renderLineContent(line: LineItem): string | ReturnType<typeof html> {
     // 只在创建标注模式（新增）时显示选中文本的高亮，编辑模式不显示（通过 editingAnnotationId 判断）
     const isEditingThisLine = !!(
       this.functionMode === FunctionMode.CREATING_ANNOTATION &&
@@ -1475,7 +1478,7 @@ export class YsTextAnnotation extends LitElement {
   /**
    * 渲染关系SVG层
    */
-  private _renderRelationshipSVG() {
+  private renderRelationshipSVG() {
     return svg`
       <defs>
         ${this.relationshipPaths.map(path => {
@@ -1584,28 +1587,46 @@ export class YsTextAnnotation extends LitElement {
     // 使用实际测量的 virtual-list-layer 高度，初始渲染时使用计算值作为回退
     const visibleHeight = this.visibleLayerHeight > 0 ? this.visibleLayerHeight : visibleLines.length * this.lineHeight
 
+    const offset = {
+      transform: `translateY(${offsetTop}px)`
+    }
+    const contentStyleMap = styleMap({ height: `${totalHeight}px` })
+    const svgClassMap = classMap({
+      'relationship-layer': true,
+      highlighted: this.isRelationshipLayerActive,
+      'selecting-text': this.isSelectingText
+    })
+    const svgStyleMap = styleMap({
+      ...offset,
+      height: `${visibleHeight}px`
+    })
+    const virtualClassMap = classMap({
+      'virtual-list-layer': true,
+      dimmed: this.isRelationshipLayerActive
+    })
+    const virtualStyleMap = styleMap({
+      ...offset
+    })
+    const virtualContentStyleMap = styleMap({
+      'padding-bottom': `${bottomPadding}px`
+    })
+
     return html`
       <div class="main">
         <div class="scroll-container" @scroll=${this.handleScroll}>
-          <div class="content-wrapper" style="height: ${totalHeight}px;">
+          <div class="content-wrapper" style=${contentStyleMap}>
             <!-- SVG 关系层：与 virtual-list-layer 完全重叠 -->
-            <svg
-              class="relationship-layer ${this.isRelationshipLayerActive ? 'highlighted' : ''} ${this.isSelectingText ? 'selecting-text' : ''}"
-              style="transform: translateY(${offsetTop}px); height: ${visibleHeight}px;"
-              overflow="visible"
-            >
-              ${this._renderRelationshipSVG()}
-            </svg>
+            <svg class=${svgClassMap} style=${svgStyleMap} overflow="visible">${this.renderRelationshipSVG()}</svg>
 
             <!-- 虚拟列表层 （标注节点层） -->
-            <div class="virtual-list-layer ${this.isRelationshipLayerActive ? 'dimmed' : ''}" style="transform: translateY(${offsetTop}px)">
+            <div class=${virtualClassMap} style=${virtualStyleMap}>
               <!-- 内层包裹，应用 VirtualCore 返回的 offset 偏移 -->
-              <div class="virtual-list-content" style="padding-bottom: ${bottomPadding}px">
+              <div class="virtual-list-content" style=${virtualContentStyleMap}>
                 ${visibleLines.map(
                   line => html`
                     <div class="line">
                       ${this.showLineNumber ? html`<span class="line-number">${line.id + 1}</span>` : null}
-                      <span class="line-content">${this._renderLineContent(line)}</span>
+                      <span class="line-content">${this.renderLineContent(line)}</span>
                     </div>
                   `
                 )}
@@ -1615,13 +1636,13 @@ export class YsTextAnnotation extends LitElement {
         </div>
 
         <!-- 右侧aside -->
-        ${this._renderAside()}
+        ${this.renderAside()}
 
         <!-- 编辑层 -->
-        ${this._renderEditLayer()}
+        ${this.renderEditLayer()}
 
         <!-- 右键菜单层 -->
-        ${this._renderContextMenu()}
+        ${this.renderContextMenu()}
       </div>
     `
   }
@@ -1872,90 +1893,108 @@ export class YsTextAnnotation extends LitElement {
     })
   }
 
-  private _renderAside() {
-    return html` <div class="aside-container">
-      ${this.groupedAnnotations.map(
-        group => html`
-          <div
-            class="annotation-marker ${group.annotations.length > 1 ? 'merged' : ''} ${this.selectedGroup?.positionPercent === group.positionPercent
-              ? 'selected'
-              : ''}"
-            style="top: ${group.positionPercent}%; background-color: ${getGroupColor(group.annotations, this.annotationType)};"
-            title="${getGroupTooltip(group.annotations)}"
-            @click=${(e: MouseEvent) => this.handleMarkerClick(e, group.annotations, group.positionPercent)}
-          >
-            <span class="annotation-marker-count">${group.annotations.length}</span>
+  private renderAsideGrouped(group: { segmentIndex: number; annotations: AnnotationItem[]; positionPercent: number }) {
+    const anClassMap = classMap({
+      'annotation-marker': true,
+      merged: group.annotations.length > 1,
+      selected: this.selectedGroup?.positionPercent === group.positionPercent
+    })
+    const anStyleMap = styleMap({
+      top: `${group.positionPercent}%`,
+      'background-color': getGroupColor(group.annotations, this.annotationType)
+    })
+    return html`
+      <div
+        class=${anClassMap}
+        style=${anStyleMap}
+        title="${getGroupTooltip(group.annotations)}"
+        @click=${(e: MouseEvent) => this.handleMarkerClick(e, group.annotations, group.positionPercent)}
+      >
+        <span class="annotation-marker-count">${group.annotations.length}</span>
+      </div>
+    `
+  }
+
+  private renderAsideSelected() {
+    if (this.selectedGroup) {
+      const anStyleMap = styleMap({
+        top: `${this.selectedGroup.markerPosition.y}px`,
+        left: `${this.selectedGroup.markerPosition.x}px`
+      })
+      const annotations = this.selectedGroup.annotations.sort((a, b) => a.lineId - b.lineId)
+      return html`
+        <div class="annotation-list-popup" style=${anStyleMap}>
+          <div class="annotation-list-header">
+            <span class="annotation-list-title">标注列表 (${this.selectedGroup.annotations.length})</span>
+            <button class="annotation-list-close" @click=${this.closeAnnotationList} title="关闭">×</button>
           </div>
-        `
-      )}
-      ${this.selectedGroup
-        ? html`
-            <div class="annotation-list-popup" style="left: ${this.selectedGroup.markerPosition.x}px; top: ${this.selectedGroup.markerPosition.y}px;">
-              <div class="annotation-list-header">
-                <span class="annotation-list-title">标注列表 (${this.selectedGroup.annotations.length})</span>
-                <button class="annotation-list-close" @click=${() => this.closeAnnotationList()} title="关闭">×</button>
-              </div>
-              <div class="annotation-list-content">
-                ${this.selectedGroup.annotations
-                  .sort((a, b) => a.lineId - b.lineId)
-                  .map(annotation => {
-                    // 获取该标注在虚拟列表中的相关关系
-                    const visibleRelations = this.getVisibleRelationships(annotation.id)
-
-                    return html`
-                      <div class="annotation-list-item-wrapper">
-                        <div
-                          class="annotation-list-item"
-                          title="点击跳转到行号 ${annotation.lineId + 1}"
-                          @click=${() => this.jumpToAnnotation(annotation)}
-                        >
-                          <div class="annotation-list-item-line">
-                            <span class="annotation-list-line-number">${annotation.lineId + 1}</span>
-                            <span class="annotation-list-type" style="background-color: ${getAnnotationColor(annotation, this.annotationType)};"
-                              >${annotation.type}</span
-                            >
-                          </div>
-                          <div class="annotation-list-item-content">${annotation.content}</div>
-                          ${annotation.description ? html`<div class="annotation-list-item-desc">${annotation.description}</div>` : null}
-                        </div>
-
-                        ${visibleRelations.length > 0
-                          ? html`
-                              <div class="annotation-list-relations">
-                                ${visibleRelations.map(
-                                  ({ relationship, relatedAnnotation, direction }) => html`
-                                    <div class="annotation-list-relation-item">
-                                      <div class="annotation-list-relation-arrow" style="color: ${relationship.color || '#c12c1f'};">
-                                        ${direction === 'end' ? '→' : '←'}
-                                      </div>
-                                      <div class="annotation-list-relation-info">
-                                        ${relationship.type
-                                          ? html`<span class="annotation-list-relation-type" style="color: ${relationship.color || '#c12c1f'};"
-                                              >${relationship.type}</span
-                                            >`
-                                          : null}
-                                        <div class="annotation-list-relation-target">
-                                          <span class="annotation-list-relation-line-number">${relatedAnnotation.lineId + 1}</span>
-                                          <span
-                                            class="annotation-list-relation-content"
-                                            style="border-left-color: ${getAnnotationColor(relatedAnnotation, this.annotationType)};"
-                                            >${relatedAnnotation.content}</span
-                                          >
-                                        </div>
-                                      </div>
-                                    </div>
-                                  `
-                                )}
-                              </div>
-                            `
-                          : null}
+          <div class="annotation-list-content">
+            ${repeat(
+              annotations,
+              annotation => annotation.id,
+              annotation => {
+                const visibleRelations = this.getVisibleRelationships(annotation.id)
+                const listTypeStyleMap = styleMap({
+                  'background-color': getAnnotationColor(annotation, this.annotationType)
+                })
+                return html`
+                  <div class="annotation-list-item-wrapper">
+                    <div class="annotation-list-item" title="点击跳转到行号 ${annotation.lineId + 1}" @click=${() => this.jumpToAnnotation(annotation)}>
+                      <div class="annotation-list-item-line">
+                        <span class="annotation-list-line-number">${annotation.lineId + 1}</span>
+                        <span class="annotation-list-type" style=${listTypeStyleMap}>${annotation.type}</span>
                       </div>
-                    `
-                  })}
-              </div>
-            </div>
-          `
-        : null}
+                      <div class="annotation-list-item-content">${annotation.content}</div>
+                      ${annotation.description ? html`<div class="annotation-list-item-desc">${annotation.description}</div>` : null}
+                    </div>
+
+                    ${visibleRelations.length > 0
+                      ? html`
+                          <div class="annotation-list-relations">
+                            ${visibleRelations.map(({ relationship, relatedAnnotation, direction }) => {
+                              const arrowStyleMap = styleMap({
+                                color: relationship.color || '#c12c1f'
+                              })
+                              const leftStyleMap = styleMap({
+                                'border-left-color': getAnnotationColor(relatedAnnotation, this.annotationType)
+                              })
+                              return html`
+                                <div class="annotation-list-relation-item">
+                                  <div class="annotation-list-relation-arrow" style=${arrowStyleMap}>${direction === 'end' ? '→' : '←'}</div>
+                                  <div class="annotation-list-relation-info">
+                                    ${relationship.type
+                                      ? html`<span class="annotation-list-relation-type" style=${arrowStyleMap}>${relationship.type}</span>`
+                                      : null}
+                                    <div class="annotation-list-relation-target">
+                                      <span class="annotation-list-relation-line-number">${relatedAnnotation.lineId + 1}</span>
+                                      <span class="annotation-list-relation-content" style=${leftStyleMap}>${relatedAnnotation.content}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              `
+                            })}
+                          </div>
+                        `
+                      : null}
+                  </div>
+                `
+              }
+            )}
+          </div>
+        </div>
+      `
+    }
+    return null
+  }
+
+  private renderAside() {
+    return html`<div class="aside-container">
+      ${repeat(
+        this.groupedAnnotations,
+        group => group.segmentIndex,
+        group => this.renderAsideGrouped(group)
+      )}
+      ${this.renderAsideSelected()}
     </div>`
   }
 
@@ -2092,14 +2131,24 @@ export class YsTextAnnotation extends LitElement {
   }
 
   // 渲染 -- 编辑层
-  private _renderEditLayer() {
+  private renderEditLayer() {
     return html`${this.editLayerVisible
-      ? html`<div class="edit-layer" style="left: ${this.editLayerPosition.x}px; top: ${this.editLayerPosition.y}px;">
+      ? html`<div
+          class="edit-layer"
+          style=${styleMap({
+            left: `${this.editLayerPosition.x}px`,
+            top: `${this.editLayerPosition.y}px`
+          })}
+        >
           ${this.isEditingRelationship
             ? html`
                 <select required .value=${this.selectedRelationshipType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
                   <option value="" disabled>选择关系类型</option>
-                  ${this.relationshipType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+                  ${repeat(
+                    this.relationshipType,
+                    type => type.type,
+                    type => html`<option value=${type.type} style=${styleMap({ color: type.color })}>${type.type}</option>`
+                  )}
                 </select>
                 <input
                   type="text"
@@ -2113,7 +2162,11 @@ export class YsTextAnnotation extends LitElement {
             : html`
                 <select required .value=${this.selectedAnnotationType} @change=${this.handleTypeSelectChange} @keydown=${this.handleInputKeyDown}>
                   <option value="" disabled>选择类型</option>
-                  ${this.annotationType.map(type => html`<option value=${type.type} style="color: ${type.color}">${type.type}</option>`)}
+                  ${repeat(
+                    this.annotationType,
+                    type => type.type,
+                    type => html`<option value=${type.type} style=${styleMap({ color: type.color })}>${type.type}</option>`
+                  )}
                 </select>
                 <input
                   type="text"
@@ -2339,7 +2392,7 @@ export class YsTextAnnotation extends LitElement {
   }
 
   // 渲染 -- 右键菜单
-  private _renderContextMenu() {
+  private renderContextMenu() {
     return html`${this.contextMenuVisible
       ? (() => {
           // 获取当前右键的标注信息（用于显示按钮文本）
@@ -2359,7 +2412,10 @@ export class YsTextAnnotation extends LitElement {
 
           return html`<div
             class="context-menu"
-            style="left: ${this.contextMenuPosition.x}px; top: ${this.contextMenuPosition.y}px;"
+            style=${styleMap({
+              left: `${this.contextMenuPosition.x}px`,
+              top: `${this.contextMenuPosition.y}px`
+            })}
             @click=${(e: MouseEvent) => e.stopPropagation()}
           >
             ${this.contextMenuTarget?.type === 'annotation'
@@ -2367,12 +2423,22 @@ export class YsTextAnnotation extends LitElement {
                   <button class="context-menu-item create-relationship" @click=${this.handleCreateRelationship}>创建关系</button>
                   ${!this.remoteAnnotationId
                     ? html`<button class="context-menu-item create-remote-annotation" @click=${this.handleCreateRemoteAnnotation}>
-                        记录<span style="color: ${currentAnnotation?.color || '#2d0bdf'}">${currentAnnotation?.content || '标注'}</span>
+                        记录<span
+                          style=${styleMap({
+                            color: currentAnnotation?.color || '#2d0bdf'
+                          })}
+                          >${currentAnnotation?.content || '标注'}</span
+                        >
                       </button>`
                     : isCurrentRemote
                       ? html`<button class="context-menu-item cancel-remote-annotation" @click=${this.handleCancelRemoteAnnotation}>取消记录</button>`
                       : html`<button class="context-menu-item connect-remote-annotation" @click=${this.handleConnectRemoteAnnotation}>
-                          连接<span style="color: ${remoteAnnotation?.color || '#2d0bdf'}">${remoteAnnotation?.content || '标注'}</span>
+                          连接<span
+                            style=${styleMap({
+                              color: remoteAnnotation?.color || '#2d0bdf'
+                            })}
+                            >${remoteAnnotation?.content || '标注'}</span
+                          >
                         </button>`}
                   <button class="context-menu-item edit-annotation" @click=${this.handleEditAnnotation}>编辑标注</button>
                 `
