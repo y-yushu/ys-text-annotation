@@ -2,6 +2,8 @@
 
 文字标注组件 - 基于 Lit 的高性能文本标注工具，支持实体标注、关系标注、虚拟滚动功能。
 
+[![npm version](https://img.shields.io/npm/v/ys-text-annotation.svg)](https://www.npmjs.com/package/ys-text-annotation) [![GitHub Repo](https://img.shields.io/badge/GitHub-Repo-181717?logo=github)](https://github.com/y-yushu/ys-text-annotation) [![GitHub Branch](https://img.shields.io/badge/Branch-main-blue?logo=github)](https://github.com/y-yushu/ys-text-annotation/tree/main)
+
 ---
 
 ## 0. 示例效果
