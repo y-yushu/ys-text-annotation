@@ -9,8 +9,6 @@ export default defineConfig({
       entryRoot: './src',
       // 输出目录
       outDir: './dist',
-      // 将所有类型合并到一个文件中（解决类型引用问题）
-      rollupTypes: true,
       // 排除不需要的文件
       exclude: ['src/**/*.spec.ts', 'src/**/*.test.ts', 'src/mock/**']
     })
