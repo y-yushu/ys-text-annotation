@@ -2,7 +2,6 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ys-text-annotation</title>
     <style>
@@ -31,32 +30,32 @@
             editable: true, // 开启编辑模式
             content: mockContent, // 所有的文本内容
             annotationType: defaultAnnotationTypes, // 标注类型
-            relationshipType: defaultRelationshipTypes, // 关系类型
+            relationshipType: defaultRelationshipTypes // 关系类型
             // 默认创建关系
-            relationshipTypeResolver: (sid, eid) => {
-              console.log('🚀 ~ sid:', sid)
-              console.log('🚀 ~ eid:', eid)
-              return '因果关系'
-            },
-            relationshipTypeFilter: (lines, sid, eid) => {
-              return [{ type: '关联/社交', color: '#E91E63' }]
-            },
-            annotationValidator: (sinfo, nodes) => {
-              console.log('🚀 ~ sinfo:', sinfo)
-              console.log('🚀 ~ nodes:', nodes)
-              return { valid: true }
-            },
-            annotationConfirmValidator: (node, nodes) => {
-              console.log('🚀 ~ node:', node)
-              console.log('🚀 ~ nodes:', nodes)
-              return { valid: true }
-            },
-            relationshipValidator: (sid, eid, lines) => {
-              console.log('🚀 ~ sid:', sid)
-              console.log('🚀 ~ eid:', eid)
-              console.log('🚀 ~ lines:', lines)
-              return { valid: false }
-            }
+            // relationshipTypeResolver: (sid, eid) => {
+            //   console.log('🚀 ~ sid:', sid)
+            //   console.log('🚀 ~ eid:', eid)
+            //   return '因果关系'
+            // },
+            // relationshipTypeFilter: (lines, sid, eid) => {
+            //   return [{ type: '关联/社交', color: '#E91E63' }]
+            // },
+            // annotationValidator: (sinfo, nodes) => {
+            //   console.log('🚀 ~ sinfo:', sinfo)
+            //   console.log('🚀 ~ nodes:', nodes)
+            //   return { valid: true }
+            // },
+            // annotationConfirmValidator: (node, nodes) => {
+            //   console.log('🚀 ~ node:', node)
+            //   console.log('🚀 ~ nodes:', nodes)
+            //   return { valid: true }
+            // },
+            // relationshipValidator: (sid, eid, lines) => {
+            //   console.log('🚀 ~ sid:', sid)
+            //   console.log('🚀 ~ eid:', eid)
+            //   console.log('🚀 ~ lines:', lines)
+            //   return { valid: false }
+            // }
           })
 
           component.setData({
