@@ -40,5 +40,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/y-yushu/ys-text-annotation.git"
-  }
+  },
+  "volta": {
+    "node": "24.18.0"
+  },
+  "packageManager": "pnpm@11.17.0"
 }
