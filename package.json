@@ -16,18 +16,18 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "vite build"
   },
   "dependencies": {
-    "lit": "^3.3.1"
+    "lit": "^3.3.3"
   },
   "devDependencies": {
-    "prettier": "^3.0.0",
-    "prettier-plugin-tailwindcss": "^0.6.0",
-    "typescript": "~5.9.3",
-    "vite": "^7.2.4",
-    "vite-plugin-dts": "^4.5.4"
+    "@types/node": "^26.1.2",
+    "@typescript/typescript6": "^6.0.2",
+    "prettier": "^3.9.6",
+    "typescript": "~7.0.2",
+    "unplugin-dts": "^1.0.3",
+    "vite": "^8.2.0"
   },
   "keywords": [
     "web-components",

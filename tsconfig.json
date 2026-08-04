@@ -10,7 +10,7 @@
     /* Bundler mode */
     "moduleResolution": "bundler",
     "moduleDetection": "force",
-    /* Declaration files - 由 vite-plugin-dts 处理 */
+    /* Declaration files - 由 unplugin-dts 处理 */
     "declaration": true,
     "declarationMap": true,
     /* Linting */

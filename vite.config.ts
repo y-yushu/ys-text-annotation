@@ -1,34 +1,21 @@
+import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
-import dts from 'vite-plugin-dts'
+import dts from 'unplugin-dts/vite'
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     dts({
-      // 指定入口文件根目录
       entryRoot: './src',
-      // 输出目录
-      outDir: './dist',
-      // 排除不需要的文件
-      exclude: ['src/**/*.spec.ts', 'src/**/*.test.ts', 'src/mock/**']
-    })
+      outDirs: './dist',
+      exclude: ['src/**/*.spec.ts', 'src/**/*.test.ts', 'src/mock/**'],
+    }),
   ],
   build: {
     lib: {
-      // 入口文件：你的 WebComponent 组件
-      entry: './src/ys-text-annotation.ts',
-      name: 'YsTextAnnotation',
-      // 输出文件名
+      entry: resolve(import.meta.dirname, 'src/ys-text-annotation.ts'),
       fileName: 'ys-text-annotation',
-      formats: ['es']
+      formats: ['es'],
     },
-    rollupOptions: {
-      // 确保外部化处理那些你不想打包进库的依赖
-      external: [],
-      output: {
-        // 在 UMD 构建模式下为这些外部化的依赖提供一个全局变量
-        globals: {}
-      }
-    }
-  }
+  },
 })
